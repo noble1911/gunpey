@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gunpey</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ── Constants ─────────────────────────────────────────────────────────────────
+const COLS        = 5;
+const ROWS        = 10;
+const DANGER_ROWS = 2;
+const FLASH_F     = 50;
+const BASE_PTS    = 100;
+
+// ── Tile Definitions ──────────────────────────────────────────────────────────
+// Port: 'T' = top corner, 'B' = bottom corner of the left/right edge.
+// Adjacent tiles connect when left.rightPort === right.leftPort.
+//
+//  '/'  l=B r=T  →  BL corner → TR corner
+//  '\\' l=T r=B  →  TL corner → BR corner
+//  '^'  l=B r=B  →  BL corner → cell-centre → BR corner   (∧)
+//  'v'  l=T r=T  →  TL corner → cell-centre → TR corner   (∨)
+
+const TILE_TYPES = ['/', '\\', '^', 'v'];
+const PORT = {
+  '/':  { l: 'B', r: 'T' },
+  '\\': { l: 'T', r: 'B' },
+  '^':  { l: 'B', r: 'B' },
+  'v':  { l: 'T', r: 'T' },
+};
+const TILE_CLR = { '/': '#4fc3f7', '\\': '#ce93d8', '^': '#81c784', 'v': '#ffb74d' };
+const GLOW_CLR = { '/': '#80d8ff', '\\': '#ea80fc', '^': '#b9f6ca', 'v': '#ffe082' };
+
+// Accent colours for each "skin" — one picked randomly per game
+const ACCENTS = ['#00d4ff', '#ff2d78', '#39ff14', '#ff9500', '#bf5fff', '#00ffcc', '#ff4444', '#f0e040'];
+
+// ── Canvas ────────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+// ── Music ─────────────────────────────────────────────────────────────────────
+// Store display names; URLs are built with encodeURIComponent so spaces work.
+const TRACK_NAMES = ['Puzzle Run', 'Puzzle', 'Pixel Cascade', 'Arcades'];
+
+const music = (() => {
+  function trackURL(name) {
+    return 'music/' + encodeURIComponent(name) + '.mp3';
+  }
+
+  // Fisher-Yates shuffle of indices
+  function buildQueue() {
+    const order = TRACK_NAMES.map((_, i) => i);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    return order;
+  }
+
+  let queue    = buildQueue();
+  let qIdx     = 0;
+  let nowIdx   = -1;   // index into TRACK_NAMES of currently playing track
+  const audio  = new Audio();
+  audio.volume = 0.5;
+
+  function playNext() {
+    nowIdx    = queue[qIdx];
+    audio.src = trackURL(TRACK_NAMES[nowIdx]);
+    audio.currentTime = 0;
+    audio.play().catch(err => console.warn('Audio play blocked:', err));
+    qIdx++;
+    if (qIdx >= queue.length) { queue = buildQueue(); qIdx = 0; }
+  }
+
+  audio.addEventListener('ended', playNext);
+  // If a file fails to load, skip to the next track after a short delay
+  audio.addEventListener('error', () => {
+    console.warn('Audio error, skipping:', audio.src);
+    setTimeout(playNext, 300);
+  });
+
+  let started = false;
+  return {
+    start()  { if (!started) { started = true; playNext(); } },
+    toggle() { audio.paused ? audio.play().catch(() => {}) : audio.pause(); },
+    get paused()      { return audio.paused; },
+    get currentName() { return nowIdx >= 0 ? TRACK_NAMES[nowIdx] : ''; },
+  };
+})();
+
+// ── Layout ────────────────────────────────────────────────────────────────────
+// Grid is centred on screen. A HUD strip sits above, controls hint below.
+let L = {};
+
+function computeLayout() {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const hudH = Math.max(50, Math.floor(vh * 0.09));   // score strip above grid
+  const ftrH = Math.max(28, Math.floor(vh * 0.05));   // controls hint below grid
+  const byH  = Math.floor((vh - hudH - ftrH - 16) / ROWS);
+  const byW  = Math.floor(vw * 0.58 / COLS);
+  const cell = Math.max(36, Math.min(byH, byW, 96));
+  const gridW = COLS * cell;
+  const gridH = ROWS * cell;
+  const gridOffX = Math.floor((vw - gridW) / 2);
+  const gridOffY = Math.floor(hudH + (vh - hudH - ftrH - gridH) / 2);
+  canvas.width  = vw;
+  canvas.height = vh;
+  L = { cell, gridW, gridH, gridOffX, gridOffY, hudH, ftrH, canW: vw, canH: vh };
+}
+window.addEventListener('resize', computeLayout);
+computeLayout();
+
+// ── Background Image ──────────────────────────────────────────────────────────
+let bgImg = null;
+
+function loadBg() {
+  bgImg = null;
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  const seed = Math.floor(Math.random() * 10000);
+  // Picsum.photos: free random photos, CORS-enabled
+  img.src = `https://picsum.photos/seed/${seed}/${Math.ceil(L.canW)}/${Math.ceil(L.canH)}`;
+  img.onload = () => { bgImg = img; };
+}
+loadBg();
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let S = {};
+
+function initState() {
+  const grid = [];
+  for (let r = 0; r < ROWS; r++) {
+    grid.push(r >= Math.floor(ROWS * 0.65) ? makeRow() : emptyRow());
+  }
+  S = {
+    grid,
+    nextRow:   makeRow(),
+    scroll:    0,
+    curR:      Math.floor(ROWS / 2) - 1,
+    curC:      2,
+    score:     0,
+    level:     1,
+    lines:     0,
+    flashCells: new Set(), // "r,c" keys of tiles currently flashing
+    flashTimer: 0,
+    comboMsg:   '',
+    comboTimer: 0,
+    frame:      0,
+    phase:      'start',
+    hi:         parseInt(localStorage.getItem('gphi') || '0', 10),
+    accent:     ACCENTS[Math.floor(Math.random() * ACCENTS.length)],
+  };
+}
+
+function emptyRow() { return new Array(COLS).fill(null); }
+
+function makeRow() {
+  const row = new Array(COLS).fill(null);
+  const forced = Math.floor(Math.random() * COLS);
+  row[forced] = rndTile();
+  for (let c = 0; c < COLS; c++) {
+    if (c !== forced && Math.random() < 0.35) row[c] = rndTile();
+  }
+  return row;
+}
+function rndTile() { return TILE_TYPES[Math.floor(Math.random() * 4)]; }
+
+// ── Connection Logic ──────────────────────────────────────────────────────────
+// Two tiles at (rowR, C) and (rowR2, C+1) connect when their shared-edge
+// corner y-coordinates match.  With T=top corner, B=bottom corner:
+//   rPort=T exits at y = rowR*cell     → connects to l=T at rowR2=rowR
+//                                         or l=B at rowR2=rowR-1
+//   rPort=B exits at y = (rowR+1)*cell → connects to l=B at rowR2=rowR
+//                                         or l=T at rowR2=rowR+1
+function canConnect(rPort, rowR, lPort, rowR2) {
+  if (rPort === 'T' && lPort === 'T') return rowR2 === rowR;
+  if (rPort === 'T' && lPort === 'B') return rowR2 === rowR - 1;
+  if (rPort === 'B' && lPort === 'B') return rowR2 === rowR;
+  if (rPort === 'B' && lPort === 'T') return rowR2 === rowR + 1;
+  return false;
+}
+
+// DFS: find all complete left→right paths (one tile per column, any row).
+// A path is an array of 5 {r, c} objects.
+function findCompletePaths() {
+  const paths = [];
+  function dfs(r, c, path) {
+    path.push({ r, c });
+    if (c === COLS - 1) { paths.push([...path]); path.pop(); return; }
+    const rPort = PORT[S.grid[r][c]].r;
+    const nc = c + 1;
+    for (let nr = 0; nr < ROWS; nr++) {
+      const t = S.grid[nr][nc];
+      if (t && canConnect(rPort, r, PORT[t].l, nr)) dfs(nr, nc, path);
+    }
+    path.pop();
+  }
+  for (let r = 0; r < ROWS; r++) {
+    if (S.grid[r][0]) dfs(r, 0, []);
+  }
+  return paths;
+}
+
+// BFS: all cells reachable from any col-0 tile going left→right.
+// Used for the "chain glow" visual indicator.
+function getChainedCells() {
+  const visited = new Set();
+  function dfs(r, c) {
+    const key = `${r},${c}`;
+    if (visited.has(key)) return;
+    visited.add(key);
+    if (c >= COLS - 1) return;
+    const rPort = PORT[S.grid[r][c]].r;
+    const nc = c + 1;
+    for (let nr = 0; nr < ROWS; nr++) {
+      const t = S.grid[nr][nc];
+      if (t && canConnect(rPort, r, PORT[t].l, nr)) dfs(nr, nc);
+    }
+  }
+  for (let r = 0; r < ROWS; r++) {
+    if (S.grid[r][0]) dfs(r, 0);
+  }
+  return visited;
+}
+
+// ── Clear / Score ─────────────────────────────────────────────────────────────
+function checkClears() {
+  if (S.flashTimer > 0) return;   // already mid-flash
+  const paths = findCompletePaths();
+  if (!paths.length) return;
+
+  // Collect unique tiles across all paths
+  const toFlash = new Set();
+  for (const path of paths) {
+    for (const { r, c } of path) toFlash.add(`${r},${c}`);
+  }
+
+  const numPaths = paths.length;
+  const numTiles = toFlash.size;
+  // Score: tiles × paths (combo bonus) × level
+  S.score += BASE_PTS * numTiles * numPaths * S.level;
+  S.lines += numPaths;
+  S.level  = Math.floor(S.lines / 5) + 1;
+  if (S.score > S.hi) { S.hi = S.score; localStorage.setItem('gphi', S.hi); }
+
+  if (numPaths > 1) {
+    S.comboMsg   = `${numPaths}× COMBO!`;
+    S.comboTimer = 120;
+  }
+
+  S.flashCells = toFlash;
+  S.flashTimer = FLASH_F;
+}
+
+function updateFlash() {
+  if (S.flashTimer <= 0) return;
+  S.flashTimer--;
+  if (S.flashTimer === 0) {
+    for (const key of S.flashCells) {
+      const [r, c] = key.split(',').map(Number);
+      if (r >= 0 && r < ROWS) S.grid[r][c] = null;
+    }
+    S.flashCells = new Set();
+  }
+}
+
+// ── Scroll ────────────────────────────────────────────────────────────────────
+function scrollSpeed() {
+  // Linearly interpolate from 720 frames/row (≈12 s) down to 160 frames/row (≈2.7 s).
+  // Reaches full speed at 10 000 pts; never goes faster beyond that.
+  const t = Math.min(S.score / 10000, 1);
+  return 1 / (720 - 560 * t);
+}
+
+function updateScroll() {
+  if (S.flashTimer > 0) return;   // pause scroll while clearing
+  S.scroll += scrollSpeed();
+  if (S.scroll < 1) return;
+  S.scroll -= 1;
+  if (S.grid[0].some(t => t !== null)) { S.phase = 'gameover'; return; }
+  S.grid.shift();
+  S.grid.push(S.nextRow);
+  S.nextRow = makeRow();
+  // Shift flash cell row indices after grid shift
+  const shifted = new Set();
+  for (const key of S.flashCells) {
+    const [r, c] = key.split(',').map(Number);
+    if (r > 0) shifted.add(`${r - 1},${c}`);
+  }
+  S.flashCells = shifted;
+  S.curR = Math.max(0, S.curR - 1);
+  checkClears();
+}
+
+// ── Cursor & Swap ─────────────────────────────────────────────────────────────
+function move(dr, dc) {
+  const nr = S.curR + dr, nc = S.curC + dc;
+  if (nr >= 0 && nr <= ROWS - 2) S.curR = nr;
+  if (nc >= 0 && nc <= COLS - 1) S.curC = nc;
+}
+function swap() {
+  const r = S.curR, c = S.curC;
+  // Block swap if either cell is flashing
+  if (S.flashCells.has(`${r},${c}`) || S.flashCells.has(`${r + 1},${c}`)) return;
+  [S.grid[r][c], S.grid[r + 1][c]] = [S.grid[r + 1][c], S.grid[r][c]];
+  checkClears();
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+window.addEventListener('keydown', e => {
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  if (S.phase === 'start')    { if (e.key === ' ' || e.key === 'Enter') { S.phase = 'playing'; music.start(); } return; }
+  if (S.phase === 'gameover') { if (e.key === 'r' || e.key === 'R') initAndStart(); return; }
+  if (e.key === 'p' || e.key === 'P') {
+    if (S.phase === 'playing') S.phase = 'paused';
+    else if (S.phase === 'paused') S.phase = 'playing';
+    return;
+  }
+  if (e.key === 'm' || e.key === 'M') { music.toggle(); return; }
+  if (S.phase !== 'playing') return;
+  if (e.key === 'ArrowUp')    move(-1,  0);
+  if (e.key === 'ArrowDown')  move(+1,  0);
+  if (e.key === 'ArrowLeft')  move( 0, -1);
+  if (e.key === 'ArrowRight') move( 0, +1);
+  if (e.key === ' ' || e.key === 'z' || e.key === 'Z') swap();
+  if (e.key === 'r' || e.key === 'R') initAndStart();
+});
+
+function initAndStart() {
+  initState();
+  loadBg();        // fresh wallpaper each game
+  S.phase = 'playing';
+}
+
+// ── Drawing helpers ───────────────────────────────────────────────────────────
+function tileY(r) { return L.gridOffY + (r - S.scroll) * L.cell; }
+function tileX(c) { return L.gridOffX + c * L.cell; }
+
+// hex colour → CSS rgba string with given alpha 0-1
+function rgba(hex, a) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// ── Draw one tile ─────────────────────────────────────────────────────────────
+function drawTile(tile, px, py, glowing, flashPhase) {
+  const cs = L.cell, cx = px + cs / 2;
+  const TL_x = px,      TL_y = py;
+  const TR_x = px + cs, TR_y = py;
+  const BL_x = px,      BL_y = py + cs;
+  const BR_x = px + cs, BR_y = py + cs;
+
+  ctx.save();
+  ctx.lineCap  = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = glowing ? Math.max(3, cs * 0.055) : Math.max(2, cs * 0.04);
+
+  if (flashPhase !== undefined) {
+    const a = 0.4 + 0.6 * Math.abs(Math.sin(flashPhase * Math.PI * 4));
+    ctx.fillStyle = `rgba(255,255,255,${a * 0.25})`;
+    ctx.fillRect(px, py, cs, cs);
+    ctx.strokeStyle = `rgba(255,255,255,${0.5 + 0.5 * a})`;
+    ctx.shadowColor = '#fff';
+    ctx.shadowBlur  = cs * 0.35;
+  } else {
+    ctx.strokeStyle = glowing ? GLOW_CLR[tile] : TILE_CLR[tile];
+    if (glowing) { ctx.shadowColor = GLOW_CLR[tile]; ctx.shadowBlur = cs * 0.28; }
+  }
+
+  ctx.beginPath();
+  switch (tile) {
+    case '/':  ctx.moveTo(BL_x, BL_y); ctx.lineTo(TR_x, TR_y); break;
+    case '\\': ctx.moveTo(TL_x, TL_y); ctx.lineTo(BR_x, BR_y); break;
+    case '^':  ctx.moveTo(BL_x, BL_y); ctx.lineTo(cx, py + cs * 0.5); ctx.lineTo(BR_x, BR_y); break;
+    case 'v':  ctx.moveTo(TL_x, TL_y); ctx.lineTo(cx, py + cs * 0.5); ctx.lineTo(TR_x, TR_y); break;
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ── Draw the game grid (cells + tiles + cursor) ───────────────────────────────
+function drawGrid() {
+  const cs = L.cell;
+  const ox = L.gridOffX, oy = L.gridOffY;
+  const accent = S.accent;
+
+  // Cell backgrounds (including one row above and the incoming row below)
+  for (let r = -1; r <= ROWS; r++) {
+    const py = tileY(r);
+    if (py + cs < 0 || py > L.canH) continue;
+    const danger = r < DANGER_ROWS;
+    for (let c = 0; c < COLS; c++) {
+      const px = tileX(c);
+      ctx.fillStyle = danger ? 'rgba(70,5,5,0.82)' : 'rgba(8,8,24,0.82)';
+      ctx.fillRect(px, py, cs, cs);
+      ctx.strokeStyle = danger ? 'rgba(180,40,40,0.25)' : 'rgba(50,50,100,0.35)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(px + 0.5, py + 0.5, cs - 1, cs - 1);
+    }
+  }
+
+  // Danger zone dashed line
+  const dlY = tileY(DANGER_ROWS);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,60,60,0.65)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath(); ctx.moveTo(ox, dlY); ctx.lineTo(ox + L.gridW, dlY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // Tiles
+  const chained = getChainedCells();
+  const inChain = (() => {
+    // chain glow for incoming row: treat as if it were at row ROWS
+    const visited = new Set();
+    function dfs(r, c, row) {
+      const key = `${r},${c}`;
+      if (visited.has(key)) return;
+      visited.add(key);
+      if (c >= COLS - 1) return;
+      const rPort = PORT[row[c]].r;
+      const nc = c + 1;
+      // only check within nextRow (single row, same-row connections)
+      const t = S.nextRow[nc];
+      if (t && canConnect(rPort, 0, PORT[t].l, 0)) dfs(0, nc, row);
+    }
+    if (S.nextRow[0]) dfs(0, 0, S.nextRow);
+    return visited;
+  })();
+
+  for (let r = 0; r < ROWS; r++) {
+    const py = tileY(r);
+    if (py + cs < 0 || py > L.canH) continue;
+    for (let c = 0; c < COLS; c++) {
+      const tile = S.grid[r][c];
+      if (!tile) continue;
+      const key = `${r},${c}`;
+      const flashing = S.flashTimer > 0 && S.flashCells.has(key);
+      const fp = flashing ? 1 - S.flashTimer / FLASH_F : undefined;
+      drawTile(tile, tileX(c), py, chained.has(key), fp);
+    }
+  }
+  // Incoming row (scrolling up from below)
+  {
+    const py = tileY(ROWS);
+    if (py < oy + L.gridH + cs) {
+      for (let c = 0; c < COLS; c++) {
+        if (S.nextRow[c]) drawTile(S.nextRow[c], tileX(c), py, inChain.has(`0,${c}`), undefined);
+      }
+    }
+  }
+
+  // Cursor
+  if (S.phase === 'playing' || S.phase === 'paused') {
+    const px = tileX(S.curC), py = tileY(S.curR);
+    const pulse = 0.5 + 0.5 * Math.sin(S.frame * 0.1);
+    const bsz = Math.max(9, cs * 0.2);
+    const bx = px + 2, by = py + 2, bw = cs - 4, bh = cs * 2 - 4;
+
+    ctx.save();
+    ctx.strokeStyle = rgba(accent, pulse);
+    ctx.lineWidth = Math.max(2, cs * 0.042);
+    ctx.lineCap = 'square';
+    ctx.shadowColor = accent;
+    ctx.shadowBlur  = 10;
+    const brackets = [
+      [[bx, by + bsz],      [bx, by],      [bx + bsz, by]],
+      [[bx+bw-bsz, by],     [bx+bw, by],   [bx+bw, by+bsz]],
+      [[bx, by+bh-bsz],     [bx, by+bh],   [bx+bsz, by+bh]],
+      [[bx+bw-bsz, by+bh],  [bx+bw, by+bh],[bx+bw, by+bh-bsz]],
+    ];
+    for (const pts of brackets) {
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      ctx.lineTo(pts[1][0], pts[1][1]);
+      ctx.lineTo(pts[2][0], pts[2][1]);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = rgba(accent, pulse * 0.35);
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 4]);
+    ctx.beginPath(); ctx.moveTo(bx, by + cs); ctx.lineTo(bx + bw, by + cs); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+}
+
+// ── Draw the frame border around the grid ─────────────────────────────────────
+function drawFrame() {
+  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh } = L;
+  const accent = S.accent;
+  const pad = 3;
+
+  // Outer glow border
+  ctx.save();
+  ctx.shadowColor = accent;
+  ctx.shadowBlur  = 18;
+  ctx.strokeStyle = rgba(accent, 0.9);
+  ctx.lineWidth   = 1.5;
+  ctx.strokeRect(ox - pad, oy - pad, gw + pad * 2, gh + pad * 2);
+  ctx.restore();
+
+  // Subtle inner white outline
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(ox - pad - 3, oy - pad - 3, gw + (pad + 3) * 2, gh + (pad + 3) * 2);
+
+  // Corner squares
+  const csz = Math.max(8, L.cell * 0.15);
+  ctx.save();
+  ctx.fillStyle = accent;
+  ctx.shadowColor = accent;
+  ctx.shadowBlur  = 12;
+  const fp = pad;
+  [
+    [ox - fp - csz,      oy - fp - csz     ],
+    [ox + gw + fp,       oy - fp - csz     ],
+    [ox - fp - csz,      oy + gh + fp      ],
+    [ox + gw + fp,       oy + gh + fp      ],
+  ].forEach(([x, y]) => ctx.fillRect(x, y, csz, csz));
+  ctx.restore();
+}
+
+// ── Draw HUD (score strip above grid, controls below) ─────────────────────────
+function drawHUD() {
+  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh, hudH, ftrH, canW, canH } = L;
+  const accent = S.accent;
+
+  // ── Score panel above grid ──────────────────────────────────────────────────
+  // Semi-transparent backing strip spanning full width
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(0, 0, canW, oy - 4);
+
+  // Thin accent line separating HUD from grid
+  ctx.save();
+  ctx.strokeStyle = rgba(accent, 0.5);
+  ctx.lineWidth   = 1;
+  ctx.shadowColor = accent;
+  ctx.shadowBlur  = 8;
+  ctx.beginPath(); ctx.moveTo(0, oy - 4); ctx.lineTo(canW, oy - 4); ctx.stroke();
+  ctx.restore();
+
+  const labelSz = Math.max(10, hudH * 0.3)  | 0;
+  const valueSz = Math.max(16, hudH * 0.52) | 0;
+  const midY    = oy * 0.52;
+
+  // Four stats evenly spaced across the grid width, centred above it
+  const stats = [
+    { label: 'SCORE', val: S.score.toLocaleString(), hi: false },
+    { label: 'BEST',  val: S.hi.toLocaleString(),    hi: false },
+    { label: 'LEVEL', val: String(S.level),           hi: true  },
+    { label: 'LINES', val: String(S.lines),           hi: false },
+  ];
+  const step = gw / stats.length;
+  stats.forEach((st, i) => {
+    const x = ox + step * i + step / 2;
+    ctx.textAlign = 'center';
+    // Label
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.font = `bold ${labelSz}px Arial`;
+    ctx.fillText(st.label, x, midY - valueSz * 0.15);
+    // Value
+    if (st.hi) {
+      ctx.save();
+      ctx.fillStyle   = accent;
+      ctx.shadowColor = accent;
+      ctx.shadowBlur  = 10;
+      ctx.font = `bold ${valueSz}px Arial`;
+      ctx.fillText(st.val, x, midY + valueSz * 0.85);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `bold ${valueSz}px Arial`;
+      ctx.fillText(st.val, x, midY + valueSz * 0.85);
+    }
+  });
+
+  // ── Controls hint below grid ────────────────────────────────────────────────
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(0, oy + L.gridH + 4, canW, canH - (oy + L.gridH + 4));
+
+  ctx.save();
+  ctx.strokeStyle = rgba(accent, 0.35);
+  ctx.lineWidth   = 1;
+  ctx.beginPath(); ctx.moveTo(0, oy + L.gridH + 4); ctx.lineTo(canW, oy + L.gridH + 4); ctx.stroke();
+  ctx.restore();
+
+  const ftr = Math.max(10, ftrH * 0.42) | 0;
+  ctx.textAlign  = 'center';
+  ctx.fillStyle  = 'rgba(255,255,255,0.3)';
+  ctx.font       = `${ftr}px Arial`;
+  ctx.fillText('←→↑↓  move    Z / SPC  swap    P  pause    M  mute    R  restart', canW / 2, oy + L.gridH + ftrH * 0.55);
+
+  // Now-playing strip
+  const trackName = music.currentName;
+  if (trackName) {
+    const noteSz = Math.max(9, ftrH * 0.36) | 0;
+    const pulse  = music.paused ? 0.25 : (0.45 + 0.2 * Math.sin(S.frame * 0.06));
+    ctx.textAlign  = 'right';
+    ctx.fillStyle  = rgba(S.accent, pulse);
+    ctx.font       = `${noteSz}px Arial`;
+    ctx.fillText(`♪  ${trackName}`, ox + gw, oy + L.gridH + ftrH * 0.92);
+  }
+
+  // Combo message (floats above grid, fades out)
+  if (S.comboTimer > 0) {
+    const alpha = Math.min(1, S.comboTimer / 30);
+    const rise  = (120 - S.comboTimer) * 0.4;
+    const fCombo = Math.max(18, Math.min(L.cell * 0.65, 40)) | 0;
+    ctx.save();
+    ctx.textAlign   = 'center';
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = S.accent;
+    ctx.shadowBlur  = 20;
+    ctx.fillStyle   = S.accent;
+    ctx.font        = `bold ${fCombo}px Arial`;
+    ctx.fillText(S.comboMsg, ox + gw / 2, oy + gh / 2 - rise);
+    ctx.restore();
+  }
+}
+
+// ── Overlay screens (start / pause / game over) ───────────────────────────────
+function drawOverlay(title, titleClr, lines) {
+  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh, canW, canH, cell: cs } = L;
+
+  // Full-screen dimming
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect(0, 0, canW, canH);
+
+  // Frosted panel over grid
+  ctx.fillStyle = 'rgba(4,4,20,0.92)';
+  const pad = cs * 0.5;
+  ctx.fillRect(ox - pad, oy - pad, gw + pad * 2, gh + pad * 2);
+
+  // Accent border on panel
+  ctx.save();
+  ctx.strokeStyle = rgba(S.accent, 0.7);
+  ctx.lineWidth   = 1.5;
+  ctx.shadowColor = S.accent;
+  ctx.shadowBlur  = 16;
+  ctx.strokeRect(ox - pad, oy - pad, gw + pad * 2, gh + pad * 2);
+  ctx.restore();
+
+  const cx   = ox + gw / 2;
+  const fTit = Math.max(24, Math.min(cs * 0.72, 52));
+  const fBod = Math.max(13, Math.min(cs * 0.34, 20));
+  const baseY = oy + gh * 0.38;
+
+  ctx.textAlign   = 'center';
+  ctx.shadowColor = titleClr;
+  ctx.shadowBlur  = fTit * 0.55;
+  ctx.fillStyle   = titleClr;
+  ctx.font        = `bold ${fTit}px Arial`;
+  ctx.fillText(title, cx, baseY);
+  ctx.shadowBlur  = 0;
+
+  ctx.fillStyle = 'rgba(210,210,230,0.9)';
+  ctx.font      = `${fBod}px Arial`;
+  lines.forEach((line, i) => {
+    ctx.fillText(line, cx, baseY + fTit * 0.9 + i * (fBod + 7));
+  });
+}
+
+// ── Main render ───────────────────────────────────────────────────────────────
+function render() {
+  // ── Background ──
+  if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
+    ctx.drawImage(bgImg, 0, 0, L.canW, L.canH);
+    // Darken so grid is readable
+    ctx.fillStyle = 'rgba(0,0,8,0.58)';
+    ctx.fillRect(0, 0, L.canW, L.canH);
+  } else {
+    ctx.fillStyle = '#060612';
+    ctx.fillRect(0, 0, L.canW, L.canH);
+  }
+
+  // ── Grid (clipped to grid area + one incoming row below) ──
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(L.gridOffX, L.gridOffY, L.gridW, L.gridH + L.cell + 2);
+  ctx.clip();
+  drawGrid();
+  ctx.restore();
+
+  // ── Frame border ──
+  drawFrame();
+
+  // ── HUD (score / controls) ──
+  drawHUD();
+
+  // ── Overlay screens ──
+  if (S.phase === 'start') {
+    drawOverlay('GUNPEY', '#7b7bff', [
+      'Swap tiles vertically to build a chain',
+      'that connects left → right across all 5 columns.',
+      '',
+      'More tiles in a chain = higher score.',
+      'Clear multiple chains at once for a combo bonus!',
+      '',
+      'Press  SPACE  or  ENTER  to start',
+    ]);
+  } else if (S.phase === 'gameover') {
+    drawOverlay('GAME OVER', '#ff5555', [
+      `Score  ${S.score.toLocaleString()}`,
+      `Best   ${S.hi.toLocaleString()}`,
+      `Lines  ${S.lines}`,
+      `Level  ${S.level}`,
+      '',
+      'Press  R  to restart',
+    ]);
+  } else if (S.phase === 'paused') {
+    drawOverlay('PAUSED', '#f0e040', [
+      'Press  P  to resume',
+      'Press  R  to restart',
+    ]);
+  }
+}
+
+// ── Game loop ─────────────────────────────────────────────────────────────────
+function loop() {
+  S.frame++;
+  if (S.phase === 'playing') {
+    updateScroll();
+    updateFlash();
+    if (S.comboTimer > 0) S.comboTimer--;
+  }
+  render();
+  requestAnimationFrame(loop);
+}
+
+initState();
+loop();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:en.wikipedia.org)",
+      "WebFetch(domain:gamefaqs.gamespot.com)",
+      "WebFetch(domain:moegamer.net)",
+      "Bash(dir:*)",
+      "Bash(start:*)",
+      "WebFetch(domain:www.defunctgames.com)",
+      "WebFetch(domain:i0.wp.com)"
+    ]
+  }
+}
