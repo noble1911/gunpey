@@ -209,74 +209,75 @@ function canConnect(rPort, rowR, lPort, rowR2) {
 }
 
 // ── Vertical Connections ─────────────────────────────────────────────────────
-// '/' and '\' tiles share corners at cell borders, so vertically adjacent
-// tiles of opposite type connect:
-//   / at row r ↔ \ at row r±1   (they share a corner)
-//   \ at row r ↔ / at row r±1
-// When a path enters a tile, the entry direction determines which exits
-// are available.  '/' entered from the left/bottom → can exit right & up;
-// '\' entered from the left/top → can exit right & down; etc.
+// Each tile has 2 corner-endpoints.  Signal enters one, exits the other.
+//   /  : BL ↔ TR       \  : TL ↔ BR
+//   ^  : BL ↔ BR       v  : TL ↔ TR
+// From the exit endpoint the signal can continue:
+//   TR/BR → right to next column   |  TL/BL → left (backward, ignored)
+//   TL    → up  (connects to BL of tile above)
+//   TR    → up  (connects to BR of tile above)
+//   BL    → down (connects to TL of tile below)
+//   BR    → down (connects to TR of tile below)
+const ENDPOINTS = {
+  '/':  ['BL', 'TR'],
+  '\\': ['TL', 'BR'],
+  '^':  ['BL', 'BR'],
+  'v':  ['TL', 'TR'],
+};
 
-// DFS: find all complete left→right paths, allowing vertical traversal
-// of '/' and '\' chains within a column.
 function findCompletePaths() {
   const paths = [];
 
-  // entry: 'left' | 'top' | 'bottom' — how we entered this tile
-  function dfs(r, c, entry, path, colVisited) {
+  // entryPt: 'BL'|'BR'|'TL'|'TR' — which endpoint the signal enters at
+  function dfs(r, c, entryPt, path, colVisited) {
     const tile = S.grid[r][c];
+    if (!tile) return;
     const key = `${r},${c}`;
     if (colVisited.has(key)) return;
+
+    const eps = ENDPOINTS[tile];
+    if (eps[0] !== entryPt && eps[1] !== entryPt) return;
 
     path.push({ r, c });
     colVisited.add(key);
 
-    // Determine available exits based on tile shape and entry direction.
-    // '/': BL↔TR.  '\': TL↔BR.  '^': BL→BR.  'v': TL→TR.
-    let canRight = false, rightPort = null;
-    let canUp = false, canDown = false;
+    const exitPt = eps[0] === entryPt ? eps[1] : eps[0];
 
-    if (tile === '/') {
-      if (entry === 'left' || entry === 'bottom') {
-        canRight = true; rightPort = 'T'; canUp = true;
-      } else { // entered from top → exit at BL → can only go down
-        canDown = true;
-      }
-    } else if (tile === '\\') {
-      if (entry === 'left' || entry === 'top') {
-        canRight = true; rightPort = 'B'; canDown = true;
-      } else { // entered from bottom → exit at TL → can only go up
-        canUp = true;
-      }
-    } else { // '^' or 'v' — no vertical connections, only left entry
-      canRight = true;
-      rightPort = PORT[tile].r;
-    }
-
-    // Exit right to next column
-    if (canRight) {
+    // Right exit (only from right-side endpoints TR or BR)
+    if (exitPt === 'TR' || exitPt === 'BR') {
+      const rightPort = exitPt === 'TR' ? 'T' : 'B';
       if (c === COLS - 1) {
         paths.push([...path]);
       } else {
         const nc = c + 1;
         for (let nr = 0; nr < ROWS; nr++) {
-          const t = S.grid[nr][nc];
-          if (t && canConnect(rightPort, r, PORT[t].l, nr))
-            dfs(nr, nc, 'left', path, new Set());
+          const nt = S.grid[nr][nc];
+          if (nt && canConnect(rightPort, r, PORT[nt].l, nr)) {
+            const nEntry = PORT[nt].l === 'B' ? 'BL' : 'TL';
+            dfs(nr, nc, nEntry, path, new Set());
+          }
         }
       }
     }
 
-    // Vertical connections within the column (only between / and \)
-    if (canUp && r > 0) {
+    // Vertical UP (exit at TL or TR → connects to BL or BR of tile above)
+    if ((exitPt === 'TL' || exitPt === 'TR') && r > 0) {
       const above = S.grid[r - 1][c];
-      if (above && ((tile === '/' && above === '\\') || (tile === '\\' && above === '/')))
-        dfs(r - 1, c, 'bottom', path, colVisited);
+      if (above) {
+        const targetEntry = exitPt === 'TL' ? 'BL' : 'BR';
+        if (ENDPOINTS[above].includes(targetEntry))
+          dfs(r - 1, c, targetEntry, path, colVisited);
+      }
     }
-    if (canDown && r < ROWS - 1) {
+
+    // Vertical DOWN (exit at BL or BR → connects to TL or TR of tile below)
+    if ((exitPt === 'BL' || exitPt === 'BR') && r < ROWS - 1) {
       const below = S.grid[r + 1][c];
-      if (below && ((tile === '\\' && below === '/') || (tile === '/' && below === '\\')))
-        dfs(r + 1, c, 'top', path, colVisited);
+      if (below) {
+        const targetEntry = exitPt === 'BL' ? 'TL' : 'TR';
+        if (ENDPOINTS[below].includes(targetEntry))
+          dfs(r + 1, c, targetEntry, path, colVisited);
+      }
     }
 
     path.pop();
@@ -284,7 +285,11 @@ function findCompletePaths() {
   }
 
   for (let r = 0; r < ROWS; r++) {
-    if (S.grid[r][0]) dfs(r, 0, 'left', [], new Set());
+    const tile = S.grid[r][0];
+    if (tile) {
+      const entryPt = PORT[tile].l === 'B' ? 'BL' : 'TL';
+      dfs(r, 0, entryPt, [], new Set());
+    }
   }
   return paths;
 }
@@ -294,52 +299,57 @@ function findCompletePaths() {
 function getChainedCells() {
   const visited = new Set();
 
-  function dfs(r, c, entry, colVisited) {
+  function dfs(r, c, entryPt, colVisited) {
     const tile = S.grid[r][c];
+    if (!tile) return;
     const key = `${r},${c}`;
     if (colVisited.has(key)) return;
+
+    const eps = ENDPOINTS[tile];
+    if (eps[0] !== entryPt && eps[1] !== entryPt) return;
+
     visited.add(key);
     colVisited.add(key);
 
-    let canRight = false, rightPort = null;
-    let canUp = false, canDown = false;
+    const exitPt = eps[0] === entryPt ? eps[1] : eps[0];
 
-    if (tile === '/') {
-      if (entry === 'left' || entry === 'bottom') {
-        canRight = true; rightPort = 'T'; canUp = true;
-      } else { canDown = true; }
-    } else if (tile === '\\') {
-      if (entry === 'left' || entry === 'top') {
-        canRight = true; rightPort = 'B'; canDown = true;
-      } else { canUp = true; }
-    } else {
-      canRight = true;
-      rightPort = PORT[tile].r;
-    }
-
-    if (canRight && c < COLS - 1) {
+    if ((exitPt === 'TR' || exitPt === 'BR') && c < COLS - 1) {
+      const rightPort = exitPt === 'TR' ? 'T' : 'B';
       const nc = c + 1;
       for (let nr = 0; nr < ROWS; nr++) {
-        const t = S.grid[nr][nc];
-        if (t && canConnect(rightPort, r, PORT[t].l, nr))
-          dfs(nr, nc, 'left', new Set());
+        const nt = S.grid[nr][nc];
+        if (nt && canConnect(rightPort, r, PORT[nt].l, nr)) {
+          const nEntry = PORT[nt].l === 'B' ? 'BL' : 'TL';
+          dfs(nr, nc, nEntry, new Set());
+        }
       }
     }
 
-    if (canUp && r > 0) {
+    if ((exitPt === 'TL' || exitPt === 'TR') && r > 0) {
       const above = S.grid[r - 1][c];
-      if (above && ((tile === '/' && above === '\\') || (tile === '\\' && above === '/')))
-        dfs(r - 1, c, 'bottom', colVisited);
+      if (above) {
+        const targetEntry = exitPt === 'TL' ? 'BL' : 'BR';
+        if (ENDPOINTS[above].includes(targetEntry))
+          dfs(r - 1, c, targetEntry, colVisited);
+      }
     }
-    if (canDown && r < ROWS - 1) {
+
+    if ((exitPt === 'BL' || exitPt === 'BR') && r < ROWS - 1) {
       const below = S.grid[r + 1][c];
-      if (below && ((tile === '\\' && below === '/') || (tile === '/' && below === '\\')))
-        dfs(r + 1, c, 'top', colVisited);
+      if (below) {
+        const targetEntry = exitPt === 'BL' ? 'TL' : 'TR';
+        if (ENDPOINTS[below].includes(targetEntry))
+          dfs(r + 1, c, targetEntry, colVisited);
+      }
     }
   }
 
   for (let r = 0; r < ROWS; r++) {
-    if (S.grid[r][0]) dfs(r, 0, 'left', new Set());
+    const tile = S.grid[r][0];
+    if (tile) {
+      const entryPt = PORT[tile].l === 'B' ? 'BL' : 'TL';
+      dfs(r, 0, entryPt, new Set());
+    }
   }
   return visited;
 }
