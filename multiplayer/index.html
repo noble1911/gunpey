@@ -57,6 +57,7 @@ const nameInput = document.getElementById('nameInput');
 const codeInput = document.getElementById('codeInput');
 
 // ── Music ─────────────────────────────────────────────────────────────────────
+const MENU_TRACK  = 'Gunpey 99';
 const TRACK_NAMES = ['Puzzle Run', 'Puzzle', 'Pixel Cascade', 'Arcades'];
 
 const music = (() => {
@@ -70,10 +71,17 @@ const music = (() => {
     return order;
   }
   let queue = buildQueue(), qIdx = 0, nowIdx = -1;
+  let onMenu = false;
   const audio = new Audio();
   const savedVol = parseFloat(localStorage.getItem('gpVol'));
   audio.volume = isNaN(savedVol) ? 0.15 : savedVol;
   function playNext() {
+    if (onMenu) {
+      audio.src = trackURL(MENU_TRACK);
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+      return;
+    }
     nowIdx = queue[qIdx];
     audio.src = trackURL(TRACK_NAMES[nowIdx]);
     audio.currentTime = 0;
@@ -83,12 +91,25 @@ const music = (() => {
   }
   audio.addEventListener('ended', playNext);
   audio.addEventListener('error', () => setTimeout(playNext, 300));
-  let started = false;
+  let menuStarted = false;
   return {
-    start()  { if (!started) { started = true; playNext(); } },
+    startMenu() {
+      onMenu = true;
+      if (!menuStarted) { menuStarted = true; playNext(); }
+      else if (audio.paused || !onMenu) playNext();
+    },
+    startGame() {
+      onMenu = false;
+      queue = buildQueue(); qIdx = 0;
+      playNext();
+    },
+    playMenu() {
+      onMenu = true;
+      playNext();
+    },
     toggle() { audio.paused ? audio.play().catch(() => {}) : audio.pause(); },
     get paused()      { return audio.paused; },
-    get currentName() { return nowIdx >= 0 ? TRACK_NAMES[nowIdx] : ''; },
+    get currentName() { return onMenu ? MENU_TRACK : (nowIdx >= 0 ? TRACK_NAMES[nowIdx] : ''); },
     get volume()      { return audio.volume; },
     set volume(v)     { audio.volume = Math.max(0, Math.min(1, v)); localStorage.setItem('gpVol', audio.volume); },
   };
@@ -624,6 +645,7 @@ function connectWS() {
         roomCode = msg.code;
         isHost = true;
         mode = 'lobby';
+        music.playMenu();
         computeLayout();
         break;
 
@@ -632,6 +654,7 @@ function connectWS() {
         roomCode = msg.code;
         lobbyPlayers = msg.players;
         mode = 'lobby';
+        music.playMenu();
         computeLayout();
         break;
 
@@ -663,7 +686,7 @@ function connectWS() {
         }
         initState();
         mode = 'playing';
-        music.start();
+        music.startGame();
         computeLayout();
         break;
 
@@ -737,6 +760,7 @@ function connectWS() {
         banners = [];
         winnerBanner = null;
         mode = 'lobby';
+        music.playMenu();
         computeLayout();
         break;
     }
@@ -747,6 +771,7 @@ function connectWS() {
       errorMsg = 'Disconnected from server';
       errorTimer = 300;
       mode = 'menu';
+      music.playMenu();
       computeLayout();
     }
   };
@@ -808,6 +833,7 @@ window.addEventListener('keydown', e => {
       if (ws) ws.close();
       soloPlay = false;
       mode = 'menu';
+      music.playMenu();
       computeLayout();
       return;
     }
@@ -853,6 +879,7 @@ window.addEventListener('keydown', e => {
   if (e.key === 'm' || e.key === 'M') music.toggle();
   if (mode === 'results' && e.key === 'Escape') {
     mode = 'menu';
+    music.playMenu();
     if (ws) ws.close();
     computeLayout();
     hideInputs();
@@ -939,6 +966,7 @@ function hitTest(pos, buttons) {
 let soloButtons = [];
 
 function handleClick(e) {
+  if (mode === 'menu' || mode === 'lobby') music.startMenu();
   const pos = getClickPos(e);
   let buttons;
   switch (mode) {
@@ -1608,7 +1636,7 @@ function drawMenuScreen() {
       initState();
       loadBg();
       mode = 'solo';
-      music.start();
+      music.startGame();
       computeLayout();
     }},
     { label: 'CREATE ROOM', color: '#7b7bff', action: () => {
@@ -1764,7 +1792,7 @@ function drawBrowserScreen() {
   ctx.fillText('Back', canW / 2, backY + backH / 2 + 5);
   browserButtons.push({
     x: backX, y: backY, w: backW, h: backH,
-    action: () => { mode = 'menu'; computeLayout(); },
+    action: () => { mode = 'menu'; music.playMenu(); computeLayout(); },
   });
 }
 
@@ -1970,6 +1998,7 @@ function drawLobbyScreen() {
     action: () => {
       if (ws) ws.close();
       mode = 'menu';
+      music.playMenu();
       computeLayout();
     },
   });
@@ -2044,6 +2073,7 @@ function drawResultsScreen() {
     x: btnX, y: btnY, w: btnW, h: btnH,
     action: () => {
       mode = 'menu';
+      music.playMenu();
       if (ws) ws.close();
       computeLayout();
     },
@@ -2202,7 +2232,7 @@ function drawSoloOverlay(title, titleClr, lines) {
   ctx.fillText('Back to Menu', cx, btnY + btnH / 2 + 5);
   soloButtons.push({
     x: btnX, y: btnY, w: btnW, h: btnH,
-    action: () => { soloPlay = false; mode = 'menu'; computeLayout(); },
+    action: () => { soloPlay = false; mode = 'menu'; music.playMenu(); computeLayout(); },
   });
 }
 
