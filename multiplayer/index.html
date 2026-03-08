@@ -191,20 +191,25 @@ loadBg();
 const menuParticles = [];
 const MENU_PARTICLE_COUNT = 40;
 
+let menuParticlesInited = false;
+
 function initMenuParticles() {
   menuParticles.length = 0;
+  const w = canvas.width || window.innerWidth;
+  const h = canvas.height || window.innerHeight;
   for (let i = 0; i < MENU_PARTICLE_COUNT; i++) {
-    menuParticles.push(makeMenuParticle(true));
+    menuParticles.push(makeMenuParticle(w, h, true));
   }
+  menuParticlesInited = true;
 }
 
-function makeMenuParticle(randomY) {
+function makeMenuParticle(canW, canH, randomY) {
   const tile = TILE_TYPES[Math.floor(Math.random() * 4)];
   const size = 12 + Math.random() * 28;
   return {
     tile,
-    x: Math.random() * (canvas.width || 1280),
-    y: randomY ? Math.random() * (canvas.height || 720) : -(size + Math.random() * 100),
+    x: Math.random() * canW,
+    y: randomY ? Math.random() * canH : -(size + Math.random() * 100),
     size,
     speed: 0.2 + Math.random() * 0.6,
     drift: (Math.random() - 0.5) * 0.3,
@@ -219,7 +224,7 @@ function updateMenuParticles(canW, canH) {
     p.y += p.speed;
     p.x += p.drift;
     if (p.y > canH + p.size || p.x < -p.size || p.x > canW + p.size) {
-      menuParticles[i] = makeMenuParticle(false);
+      menuParticles[i] = makeMenuParticle(canW, canH, false);
       menuParticles[i].x = Math.random() * canW;
     }
   }
@@ -256,7 +261,6 @@ function drawScanlines(canW, canH) {
 }
 
 let menuFrame = 0;
-initMenuParticles();
 
 // ── Mode State Machine ───────────────────────────────────────────────────────
 // menu → browser → lobby → playing → results
@@ -1505,7 +1509,8 @@ function drawMenuScreen() {
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, canW, canH);
 
-  // Animated falling tile particles
+  // Animated falling tile particles (lazy init after canvas is sized)
+  if (!menuParticlesInited) initMenuParticles();
   updateMenuParticles(canW, canH);
   drawMenuParticles(canW, canH);
 
@@ -1658,6 +1663,11 @@ function drawMenuScreen() {
 
     menuButtons.push({ x: btnX, y: by, w: btnW, h: btnH, action: btn.action });
   });
+
+  // Volume slider
+  const slW = Math.min(140, canW * 0.18);
+  const slH = 22;
+  drawVolumeSlider(canW / 2 - slW / 2, canH - 58, slW, slH, '#7b7bff');
 
   // Footer credit
   ctx.fillStyle = 'rgba(255,255,255,0.12)';
