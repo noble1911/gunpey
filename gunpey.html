@@ -49,6 +49,7 @@ const ctx    = canvas.getContext('2d');
 
 // ── Music ─────────────────────────────────────────────────────────────────────
 // Store display names; URLs are built with encodeURIComponent so spaces work.
+const MENU_TRACK  = 'Gunpey 99';
 const TRACK_NAMES = ['Puzzle Run', 'Puzzle', 'Pixel Cascade', 'Arcades'];
 
 const music = (() => {
@@ -69,10 +70,18 @@ const music = (() => {
   let queue    = buildQueue();
   let qIdx     = 0;
   let nowIdx   = -1;   // index into TRACK_NAMES of currently playing track
+  let onMenu   = true; // true while menu track is playing
   const audio  = new Audio();
   audio.volume = 0.5;
 
   function playNext() {
+    if (onMenu) {
+      // loop menu track
+      audio.src = trackURL(MENU_TRACK);
+      audio.currentTime = 0;
+      audio.play().catch(err => console.warn('Audio play blocked:', err));
+      return;
+    }
     nowIdx    = queue[qIdx];
     audio.src = trackURL(TRACK_NAMES[nowIdx]);
     audio.currentTime = 0;
@@ -88,12 +97,21 @@ const music = (() => {
     setTimeout(playNext, 300);
   });
 
-  let started = false;
+  let menuStarted = false;
   return {
-    start()  { if (!started) { started = true; playNext(); } },
+    startMenu() {
+      if (!menuStarted) { menuStarted = true; onMenu = true; playNext(); }
+    },
+    startGame() {
+      onMenu = false;
+      playNext();
+    },
     toggle() { audio.paused ? audio.play().catch(() => {}) : audio.pause(); },
     get paused()      { return audio.paused; },
-    get currentName() { return nowIdx >= 0 ? TRACK_NAMES[nowIdx] : ''; },
+    get currentName() {
+      if (onMenu) return MENU_TRACK;
+      return nowIdx >= 0 ? TRACK_NAMES[nowIdx] : '';
+    },
   };
 })();
 
@@ -323,7 +341,7 @@ function swap() {
 // ── Input ─────────────────────────────────────────────────────────────────────
 window.addEventListener('keydown', e => {
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
-  if (S.phase === 'start')    { if (e.key === ' ' || e.key === 'Enter') { S.phase = 'playing'; music.start(); } return; }
+  if (S.phase === 'start')    { music.startMenu(); if (e.key === ' ' || e.key === 'Enter') { S.phase = 'playing'; music.startGame(); } return; }
   if (S.phase === 'gameover') { if (e.key === 'r' || e.key === 'R') initAndStart(); return; }
   if (e.key === 'p' || e.key === 'P') {
     if (S.phase === 'playing') S.phase = 'paused';
