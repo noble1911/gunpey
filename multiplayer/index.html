@@ -516,11 +516,18 @@ function connectWS() {
         mode = 'results';
         computeLayout();
         break;
+
+      case 'returnToLobby':
+        lobbyPlayers = msg.players;
+        opponents.clear();
+        mode = 'lobby';
+        computeLayout();
+        break;
     }
   };
 
   ws.onclose = () => {
-    if (mode === 'playing' || mode === 'lobby') {
+    if (mode === 'playing' || mode === 'lobby' || mode === 'spectating') {
       errorMsg = 'Disconnected from server';
       errorTimer = 300;
       mode = 'menu';
@@ -628,7 +635,7 @@ window.addEventListener('keydown', e => {
   }
 
   if (e.key === 'm' || e.key === 'M') music.toggle();
-  if (mode === 'results' && (e.key === ' ' || e.key === 'Enter')) {
+  if (mode === 'results' && e.key === 'Escape') {
     mode = 'menu';
     if (ws) ws.close();
     computeLayout();
@@ -1352,19 +1359,24 @@ function drawResultsScreen() {
     });
   }
 
-  // Back button
-  const btnW = 200;
-  const btnH = 48;
+  // Returning to lobby message
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = '14px Arial';
+  ctx.fillText('Returning to lobby soon...', canW / 2, canH * 0.78);
+
+  // Leave button (back to main menu)
+  const btnW = 160;
+  const btnH = 40;
   const btnX = canW / 2 - btnW / 2;
   const btnY = canH * 0.85;
-  ctx.fillStyle = 'rgba(60,60,120,0.7)';
+  ctx.fillStyle = 'rgba(80,40,40,0.7)';
   ctx.fillRect(btnX, btnY, btnW, btnH);
-  ctx.strokeStyle = 'rgba(123,123,255,0.5)';
+  ctx.strokeStyle = 'rgba(255,100,100,0.4)';
   ctx.lineWidth = 1;
   ctx.strokeRect(btnX, btnY, btnW, btnH);
   ctx.fillStyle = '#ddd';
-  ctx.font = 'bold 16px Arial';
-  ctx.fillText('Back to Menu', canW / 2, btnY + btnH / 2 + 6);
+  ctx.font = 'bold 14px Arial';
+  ctx.fillText('Leave Game', canW / 2, btnY + btnH / 2 + 5);
   resultButtons.push({
     x: btnX, y: btnY, w: btnW, h: btnH,
     action: () => {

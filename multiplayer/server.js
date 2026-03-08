@@ -242,8 +242,20 @@ wss.on('connection', (ws) => {
             winner: winner ? { id: winner.id, name: winner.name } : null,
             placements: room.placements.sort((a, b) => a.placement - b.placement),
           });
-          // Clean up room after a delay
-          setTimeout(() => rooms.delete(room.code), 60000);
+          // Return everyone to lobby after 8 seconds
+          room.returnTimer = setTimeout(() => {
+            room.state = 'lobby';
+            room.placements = [];
+            room.aliveCount = 0;
+            for (const p of room.players.values()) {
+              p.alive = true;
+              p.score = 0;
+              p.lines = 0;
+              p.level = 1;
+              p.grid = '';
+            }
+            room.broadcast({ type: 'returnToLobby', players: room.playerList() });
+          }, 8000);
         }
         break;
       }
@@ -287,10 +299,27 @@ wss.on('connection', (ws) => {
           winner: winner ? { id: winner.id, name: winner.name } : null,
           placements: room.placements.sort((a, b) => a.placement - b.placement),
         });
-        setTimeout(() => rooms.delete(room.code), 60000);
+        room.returnTimer = setTimeout(() => {
+          room.state = 'lobby';
+          room.placements = [];
+          room.aliveCount = 0;
+          for (const p of room.players.values()) {
+            p.alive = true;
+            p.score = 0;
+            p.lines = 0;
+            p.level = 1;
+            p.grid = '';
+          }
+          room.broadcast({ type: 'returnToLobby', players: room.playerList() });
+        }, 8000);
       }
     }
     room.players.delete(player.id);
+    // If room is now empty after disconnect, clean it up
+    if (room.players.size === 0) {
+      if (room.returnTimer) clearTimeout(room.returnTimer);
+      rooms.delete(room.code);
+    }
   });
 });
 
