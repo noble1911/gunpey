@@ -1063,9 +1063,37 @@ function drawFrame() {
 }
 
 // ── Mini-Board Rendering ──────────────────────────────────────────────────────
-function drawMiniBoard(opp, x, y, boardW, boardH, labelH, rank) {
-  const totalH = boardH + labelH;
+function drawMiniTile(tile, px, py, cw, ch) {
+  // Draw the actual line shape at mini scale
+  const clr = TILE_CLR[tile] || '#888';
+  ctx.strokeStyle = clr;
+  ctx.lineWidth = Math.max(1, Math.min(cw, ch) * 0.15);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  switch (tile) {
+    case '/':
+      ctx.moveTo(px, py + ch);
+      ctx.lineTo(px + cw, py);
+      break;
+    case '\\':
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + cw, py + ch);
+      break;
+    case '^':
+      ctx.moveTo(px, py + ch);
+      ctx.lineTo(px + cw / 2, py + ch * 0.5);
+      ctx.lineTo(px + cw, py + ch);
+      break;
+    case 'v':
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + cw / 2, py + ch * 0.5);
+      ctx.lineTo(px + cw, py);
+      break;
+  }
+  ctx.stroke();
+}
 
+function drawMiniBoard(opp, x, y, boardW, boardH, labelH, rank) {
   // Background
   ctx.fillStyle = 'rgba(8,8,24,0.88)';
   ctx.fillRect(x, y, boardW, boardH);
@@ -1078,7 +1106,7 @@ function drawMiniBoard(opp, x, y, boardW, boardH, labelH, rank) {
   ctx.lineWidth = borderW;
   ctx.strokeRect(x, y, boardW, boardH);
 
-  // Draw grid cells with correct aspect ratio
+  // Draw grid tiles as lines
   if (opp.grid && opp.grid.length === ROWS * COLS) {
     const cellW = boardW / COLS;
     const cellH = boardH / ROWS;
@@ -1086,8 +1114,7 @@ function drawMiniBoard(opp, x, y, boardW, boardH, labelH, rank) {
       for (let c = 0; c < COLS; c++) {
         const ch = opp.grid[r * COLS + c];
         if (ch !== '.') {
-          ctx.fillStyle = TILE_CLR[ch] || '#888';
-          ctx.fillRect(x + c * cellW + 0.5, y + r * cellH + 0.5, cellW - 1, cellH - 1);
+          drawMiniTile(ch, x + c * cellW, y + r * cellH, cellW, cellH);
         }
       }
     }
@@ -1097,7 +1124,6 @@ function drawMiniBoard(opp, x, y, boardW, boardH, labelH, rank) {
   if (!opp.alive) {
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
     ctx.fillRect(x, y, boardW, boardH);
-    // Red X
     ctx.save();
     ctx.strokeStyle = 'rgba(255,50,50,0.6)';
     ctx.lineWidth = Math.max(2, boardW * 0.06);
@@ -1120,12 +1146,10 @@ function drawMiniBoard(opp, x, y, boardW, boardH, labelH, rank) {
   ctx.textAlign = 'center';
   const cx = x + boardW / 2;
 
-  // Rank number + name
   ctx.fillStyle = opp.alive ? '#ddd' : '#666';
   ctx.font = `bold ${nameSz}px Arial`;
   ctx.fillText(`#${rank} ${displayName}`, cx, y + boardH + nameSz + 1);
 
-  // Score
   ctx.fillStyle = opp.alive ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.2)';
   ctx.font = `${scoreSz}px Arial`;
   ctx.fillText(opp.score.toLocaleString(), cx, y + boardH + nameSz + scoreSz + 3);
@@ -1142,36 +1166,37 @@ function drawMiniBoardArea() {
     return b.score - a.score;
   });
   const shown = opps.slice(0, 20);
+  if (shown.length === 0) return;
 
-  // Compute board size maintaining 1:2 aspect ratio (5 cols, 10 rows)
-  const cols = 4;
-  const maxRows = 5;
+  // Always lay out in a 4-column grid. Max board width is capped so even
+  // with 1 opponent the board stays small (like Tetris 99 side panels).
+  const cols = Math.min(4, shown.length);
+  const gridRows = Math.ceil(shown.length / cols);
   const gap = 5;
-  const labelH = 26; // space for name + score below each board
+  const labelH = 26;
+  const MAX_BOARD_W = 80; // hard cap — never larger than this
 
-  // Available width per board
-  const availW = (areaW - gap * (cols + 1)) / cols;
-  // Board height = 2 * board width (1:2 ratio), plus label space
-  const totalSlotH = availW * 2 + labelH;
-  // How many rows fit?
-  const fittingRows = Math.min(maxRows, Math.floor((areaH - gap) / (totalSlotH + gap)));
-  const numRows = Math.max(1, fittingRows);
+  // Size from available width
+  let boardW = Math.min(MAX_BOARD_W, (areaW - gap * (cols + 1)) / cols);
+  let boardH = boardW * 2; // 1:2 aspect ratio
 
-  // If boards are too tall, constrain by height
-  const maxTotalH = (areaH - gap * (numRows + 1)) / numRows;
-  let boardW = availW;
-  let boardH = boardW * 2;
-  if (boardH + labelH > maxTotalH) {
-    boardH = maxTotalH - labelH;
+  // Constrain by available height
+  const maxSlotH = (areaH - gap * (gridRows + 1)) / gridRows;
+  if (boardH + labelH > maxSlotH) {
+    boardH = maxSlotH - labelH;
     boardW = boardH / 2;
   }
+
+  // Ensure minimums
+  boardW = Math.max(20, boardW);
+  boardH = Math.max(40, boardH);
 
   const slotW = boardW;
   const slotH = boardH + labelH;
 
-  // Center boards horizontally within available columns
+  // Position grid: top-left of the mini area
   const usedW = cols * slotW + (cols - 1) * gap;
-  const startX = areaX + (areaW - usedW) / 2;
+  const startX = areaX + gap;
 
   // Update animated positions
   for (let i = 0; i < shown.length; i++) {
@@ -1182,24 +1207,18 @@ function drawMiniBoardArea() {
       boardPositions.set(opp.id, bp);
     }
     bp.targetIdx = i;
-    // Smooth lerp toward target
     bp.currentY += (bp.targetIdx - bp.currentY) * 0.12;
-    // Snap if close enough
     if (Math.abs(bp.currentY - bp.targetIdx) < 0.01) bp.currentY = bp.targetIdx;
   }
 
-  // Draw boards using animated Y positions
+  // Draw boards
   for (let i = 0; i < shown.length; i++) {
     const opp = shown[i];
     const bp = boardPositions.get(opp.id);
     const animIdx = bp ? bp.currentY : i;
-
-    const col = Math.floor(animIdx) % cols;
     const rowFrac = animIdx / cols;
 
-    // For smooth animation: use fractional row position
     const targetCol = i % cols;
-    const targetRow = Math.floor(i / cols);
     const bx = startX + targetCol * (slotW + gap);
     const by = areaY + gap + rowFrac * (slotH + gap);
 
