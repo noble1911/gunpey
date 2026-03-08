@@ -152,7 +152,7 @@ wss.on('connection', (ws) => {
         player = new Player(playerId, msg.name || 'Player', ws);
         player.roomCode = code;
         room.players.set(playerId, player);
-        send(ws, { type: 'joined', playerId, players: room.playerList() });
+        send(ws, { type: 'joined', playerId, code, players: room.playerList() });
         room.broadcast({ type: 'lobby', players: room.playerList() }, playerId);
         break;
       }

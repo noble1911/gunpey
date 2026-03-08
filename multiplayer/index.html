@@ -629,6 +629,7 @@ function connectWS() {
 
       case 'joined':
         myPlayerId = msg.playerId;
+        roomCode = msg.code;
         lobbyPlayers = msg.players;
         mode = 'lobby';
         computeLayout();
@@ -1768,87 +1769,176 @@ function drawBrowserScreen() {
 }
 
 // ── Lobby Screen ──────────────────────────────────────────────────────────────
+function drawCopyIcon(cx, cy, size, copied) {
+  // Simple clipboard icon drawn with lines
+  ctx.save();
+  ctx.strokeStyle = copied ? '#39ff14' : 'rgba(255,255,255,0.6)';
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = 'round';
+  const s = size;
+  // Back rect (offset)
+  ctx.strokeRect(cx + s * 0.15, cy, s * 0.6, s * 0.75);
+  // Front rect
+  ctx.fillStyle = copied ? 'rgba(57,255,20,0.15)' : 'rgba(10,10,30,0.8)';
+  ctx.fillRect(cx, cy + s * 0.2, s * 0.6, s * 0.75);
+  ctx.strokeRect(cx, cy + s * 0.2, s * 0.6, s * 0.75);
+  if (copied) {
+    // Checkmark
+    ctx.strokeStyle = '#39ff14';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx + s * 0.15, cy + s * 0.55);
+    ctx.lineTo(cx + s * 0.28, cy + s * 0.7);
+    ctx.lineTo(cx + s * 0.5, cy + s * 0.4);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawLobbyScreen() {
   const { canW, canH } = L;
-  ctx.fillStyle = '#060612';
+  menuFrame++;
+
+  // Dark gradient background (matches menu)
+  const grad = ctx.createLinearGradient(0, 0, 0, canH);
+  grad.addColorStop(0, '#05050f');
+  grad.addColorStop(0.5, '#0a0a20');
+  grad.addColorStop(1, '#050510');
+  ctx.fillStyle = grad;
   ctx.fillRect(0, 0, canW, canH);
 
+  // Retro grid overlay
+  ctx.save();
+  ctx.strokeStyle = 'rgba(123,123,255,0.06)';
+  ctx.lineWidth = 1;
+  const gridSpacing = 40;
+  for (let x = 0; x < canW; x += gridSpacing) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canH); ctx.stroke();
+  }
+  for (let y = 0; y < canH; y += gridSpacing) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canW, y); ctx.stroke();
+  }
+  ctx.restore();
+
+  // Scanlines
+  drawScanlines(canW, canH);
+
   lobbyButtons = [];
-
-  // Room code
   ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  ctx.font = '14px Arial';
-  ctx.fillText('Room Code:', canW / 2, canH * 0.1);
 
-  const codeFontSize = Math.min(72, canW * 0.1);
+  const pulse = 0.7 + 0.3 * Math.sin(menuFrame * 0.04);
+
+  // ── Room Code ──
+  ctx.fillStyle = `rgba(255,255,255,${0.3 + 0.1 * pulse})`;
+  ctx.font = '12px Arial';
+  ctx.fillText('ROOM CODE', canW / 2, canH * 0.1);
+
+  const codeFontSize = Math.min(64, canW * 0.09);
   ctx.save();
   ctx.fillStyle = '#7b7bff';
   ctx.shadowColor = '#7b7bff';
-  ctx.shadowBlur = 20;
+  ctx.shadowBlur = 25 * pulse;
   ctx.font = `bold ${codeFontSize}px Arial`;
-  ctx.fillText(roomCode, canW / 2, canH * 0.2);
+  const codeY = canH * 0.19;
+  ctx.fillText(roomCode, canW / 2, codeY);
   ctx.restore();
 
-  // Copy button next to room code
+  // Copy icon next to room code
   ctx.font = `bold ${codeFontSize}px Arial`;
   const codeHalfW = ctx.measureText(roomCode).width / 2;
-  const copyBtnW = 60, copyBtnH = 28;
-  const copyBtnX = canW / 2 + codeHalfW + 12;
-  const copyBtnY = canH * 0.2 - codeFontSize * 0.45;
+  const iconSize = 20;
+  const iconX = canW / 2 + codeHalfW + 10;
+  const iconY = codeY - iconSize * 0.7;
   const justCopied = Date.now() - codeCopiedAt < 1500;
-
-  ctx.fillStyle = justCopied ? 'rgba(60,160,60,0.7)' : 'rgba(80,80,120,0.7)';
-  ctx.beginPath();
-  ctx.roundRect(copyBtnX, copyBtnY, copyBtnW, copyBtnH, 6);
-  ctx.fill();
-  ctx.strokeStyle = justCopied ? 'rgba(100,255,100,0.5)' : 'rgba(123,123,255,0.4)';
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 12px Arial';
-  ctx.fillText(justCopied ? 'Copied!' : 'Copy', copyBtnX + copyBtnW / 2, copyBtnY + copyBtnH / 2 + 4);
-
+  drawCopyIcon(iconX, iconY, iconSize, justCopied);
   lobbyButtons.push({
-    x: copyBtnX, y: copyBtnY, w: copyBtnW, h: copyBtnH,
+    x: iconX - 4, y: iconY - 4, w: iconSize + 12, h: iconSize + 12,
     action: () => {
       navigator.clipboard.writeText(roomCode).catch(() => {});
       codeCopiedAt = Date.now();
     },
   });
 
-  // Player list
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 18px Arial';
-  ctx.fillText(`Players (${lobbyPlayers.length})`, canW / 2, canH * 0.3);
+  // Decorative line under code
+  const lineW = Math.min(280, canW * 0.35);
+  const lineY = codeY + codeFontSize * 0.3;
+  ctx.save();
+  const lineGrad = ctx.createLinearGradient(canW/2 - lineW/2, 0, canW/2 + lineW/2, 0);
+  lineGrad.addColorStop(0, 'rgba(123,123,255,0)');
+  lineGrad.addColorStop(0.5, `rgba(123,123,255,${0.4 * pulse})`);
+  lineGrad.addColorStop(1, 'rgba(123,123,255,0)');
+  ctx.strokeStyle = lineGrad;
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(canW/2 - lineW/2, lineY); ctx.lineTo(canW/2 + lineW/2, lineY); ctx.stroke();
+  ctx.restore();
 
-  const listStartY = canH * 0.35;
+  // ── Player List ──
+  const listTop = canH * 0.3;
+  ctx.fillStyle = `rgba(255,255,255,${0.3 + 0.1 * pulse})`;
+  ctx.font = 'bold 12px Arial';
+  ctx.fillText(`PLAYERS  (${lobbyPlayers.length})`, canW / 2, listTop);
+
+  const listW = Math.min(280, canW * 0.4);
+  const listX = canW / 2 - listW / 2;
+  const rowH = 32;
+  const listStartY = listTop + 12;
+
   lobbyPlayers.forEach((p, i) => {
-    ctx.fillStyle = p.id === myPlayerId ? '#7b7bff' : '#ccc';
-    ctx.font = '16px Arial';
-    const youTag = p.id === myPlayerId ? ' (you)' : '';
-    const hostTag = (isHost && p.id === myPlayerId) || (!isHost && i === 0) ? ' [HOST]' : '';
-    ctx.fillText(`${p.name}${youTag}${hostTag}`, canW / 2, listStartY + i * 28);
+    const ry = listStartY + i * rowH;
+    const isSelf = p.id === myPlayerId;
+    const isPlayerHost = (isHost && isSelf) || (!isHost && i === 0);
+
+    // Row background
+    ctx.fillStyle = isSelf ? 'rgba(123,123,255,0.12)' : 'rgba(255,255,255,0.03)';
+    ctx.fillRect(listX, ry, listW, rowH - 2);
+
+    // Left accent bar for self
+    if (isSelf) {
+      ctx.fillStyle = '#7b7bff';
+      ctx.fillRect(listX, ry, 3, rowH - 2);
+    }
+
+    // Name
+    ctx.fillStyle = isSelf ? '#7b7bff' : '#ccc';
+    ctx.font = '14px Arial';
+    ctx.textAlign = 'left';
+    let name = p.name;
+    if (isSelf) name += '  (you)';
+    ctx.fillText(name, listX + 12, ry + rowH / 2 + 4);
+
+    // Host badge
+    if (isPlayerHost) {
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#ff9500';
+      ctx.font = 'bold 10px Arial';
+      ctx.fillText('HOST', listX + listW - 8, ry + rowH / 2 + 3);
+    }
+
+    ctx.textAlign = 'center';
   });
 
-  // Start button (host only)
-  if (isHost) {
-    const btnW = 200;
-    const btnH = 50;
-    const btnX = canW / 2 - btnW / 2;
-    const btnY = canH * 0.75;
-    const canStart = lobbyPlayers.length >= 2;
+  // ── Buttons ──
+  const btnW = Math.min(240, canW * 0.3);
+  const btnH = 40;
+  const btnX = canW / 2 - btnW / 2;
 
-    ctx.fillStyle = canStart ? 'rgba(60,120,60,0.8)' : 'rgba(60,60,60,0.5)';
+  if (isHost) {
+    const canStart = lobbyPlayers.length >= 2;
+    const btnY = canH * 0.78;
+    const color = canStart ? '#39ff14' : '#555';
+
+    // Menu-style button
+    ctx.fillStyle = 'rgba(10,10,30,0.75)';
     ctx.fillRect(btnX, btnY, btnW, btnH);
-    ctx.strokeStyle = canStart ? 'rgba(100,255,100,0.5)' : 'rgba(100,100,100,0.3)';
-    ctx.lineWidth = 1.5;
+    ctx.fillStyle = color;
+    ctx.fillRect(btnX, btnY, 3, btnH);
+    ctx.strokeStyle = rgba(color, 0.35);
+    ctx.lineWidth = 1;
     ctx.strokeRect(btnX, btnY, btnW, btnH);
 
-    ctx.fillStyle = canStart ? '#fff' : '#666';
-    ctx.font = 'bold 18px Arial';
-    ctx.fillText(canStart ? 'START GAME' : 'Need 2+ players', canW / 2, btnY + btnH / 2 + 6);
+    ctx.fillStyle = canStart ? '#ddd' : '#555';
+    ctx.font = 'bold 14px Arial';
+    ctx.fillText(canStart ? 'START GAME' : 'NEED 2+ PLAYERS', canW / 2, btnY + btnH / 2 + 5);
 
     if (canStart) {
       lobbyButtons.push({
@@ -1857,23 +1947,26 @@ function drawLobbyScreen() {
       });
     }
   } else {
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
-    ctx.font = '16px Arial';
-    ctx.fillText('Waiting for host to start...', canW / 2, canH * 0.78);
+    const waitY = canH * 0.78;
+    ctx.fillStyle = `rgba(255,255,255,${0.2 + 0.15 * Math.sin(menuFrame * 0.05)})`;
+    ctx.font = '14px Arial';
+    ctx.fillText('Waiting for host to start...', canW / 2, waitY + 20);
   }
 
-  // Back button
-  const backW = 100;
-  const backH = 36;
-  const backX = canW / 2 - backW / 2;
-  const backY = canH - 60;
-  ctx.fillStyle = 'rgba(80,40,40,0.7)';
-  ctx.fillRect(backX, backY, backW, backH);
+  // Leave button (menu style)
+  const leaveY = canH - 60;
+  ctx.fillStyle = 'rgba(10,10,30,0.75)';
+  ctx.fillRect(btnX, leaveY, btnW, btnH);
+  ctx.fillStyle = '#ff5555';
+  ctx.fillRect(btnX, leaveY, 3, btnH);
+  ctx.strokeStyle = rgba('#ff5555', 0.35);
+  ctx.lineWidth = 1;
+  ctx.strokeRect(btnX, leaveY, btnW, btnH);
   ctx.fillStyle = '#ddd';
-  ctx.font = 'bold 13px Arial';
-  ctx.fillText('Leave', canW / 2, backY + backH / 2 + 5);
+  ctx.font = 'bold 14px Arial';
+  ctx.fillText('LEAVE', canW / 2, leaveY + btnH / 2 + 5);
   lobbyButtons.push({
-    x: backX, y: backY, w: backW, h: backH,
+    x: btnX, y: leaveY, w: btnW, h: btnH,
     action: () => {
       if (ws) ws.close();
       mode = 'menu';
