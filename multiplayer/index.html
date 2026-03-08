@@ -152,44 +152,40 @@ function computeLayout() {
 }
 
 function computeLayoutSingle(vw, vh) {
-  const hudH = Math.max(50, Math.floor(vh * 0.09));
-  const ftrH = Math.max(28, Math.floor(vh * 0.05));
+  const ftrH = Math.max(28, Math.floor(vh * 0.04));
   const totalRows = ROWS + 1;
-  const byH  = Math.floor((vh - hudH - ftrH - 16) / totalRows);
-  const byW  = Math.floor(vw * 0.58 / COLS);
-  const cell = Math.max(36, Math.min(byH, byW, 96));
+  const maxCellH = Math.floor((vh - ftrH - 24) / totalRows);
+  const maxCellW = Math.floor((vw * 0.5) / COLS);
+  const cell = Math.max(36, Math.min(maxCellH, maxCellW, 96));
   const gridW = COLS * cell;
   const gridH = ROWS * cell;
   const gridOffX = Math.floor((vw - gridW) / 2);
-  const gridOffY = Math.floor(hudH + (vh - hudH - ftrH - totalRows * cell) / 2);
-  L = { cell, gridW, gridH, gridOffX, gridOffY, hudH, ftrH, canW: vw, canH: vh, miniArea: null };
+  const gridOffY = Math.floor((vh - ftrH - totalRows * cell) / 2);
+  L = { cell, gridW, gridH, gridOffX, gridOffY, ftrH, canW: vw, canH: vh, miniArea: null };
 }
 
 function computeLayoutMultiplayer(vw, vh) {
-  const hudH = Math.max(44, Math.floor(vh * 0.07));
-  const ftrH = Math.max(28, Math.floor(vh * 0.05));
+  const ftrH = Math.max(28, Math.floor(vh * 0.04));
   const totalRows = ROWS + 1;
-  // Player grid takes left portion; leave right for mini-boards
-  const gridAreaW = Math.floor(vw * 0.45);
-  const playAreaTop = hudH + 4;
-  const playAreaBot = vh - ftrH - 4;
-  const playAreaH = playAreaBot - playAreaTop;
-  const byH = Math.floor((playAreaH - 8) / totalRows);
-  const byW = Math.floor((gridAreaW - 40) / COLS);
-  const cell = Math.max(28, Math.min(byH, byW, 80));
+  // Board takes left ~40% of screen
+  const gridAreaW = Math.floor(vw * 0.42);
+  const maxCellH = Math.floor((vh - ftrH - 24) / totalRows);
+  const maxCellW = Math.floor((gridAreaW - 32) / COLS);
+  const cell = Math.max(28, Math.min(maxCellH, maxCellW, 80));
   const gridW = COLS * cell;
   const gridH = ROWS * cell;
+  const totalH = totalRows * cell;
   const gridOffX = Math.max(8, Math.floor((gridAreaW - gridW) / 2));
-  const gridOffY = Math.floor(playAreaTop + (playAreaH - totalRows * cell) / 2);
+  const gridOffY = Math.floor((vh - ftrH - totalH) / 2);
 
-  // Mini-board area: right side, between HUD and footer
-  const miniLeft = gridOffX + gridW + cell;  // after the player grid + some margin
-  const miniTop = playAreaTop;
+  // Mini-board area: right of board, aligned to board top
+  const miniLeft = gridOffX + gridW + cell;
+  const miniTop = gridOffY;  // CRITICAL: same as board top, not higher
   const miniWidth = vw - miniLeft - 8;
-  const miniHeight = playAreaH;
+  const miniHeight = totalH;  // same height as board + incoming row
 
   L = {
-    cell, gridW, gridH, gridOffX, gridOffY, hudH, ftrH, canW: vw, canH: vh,
+    cell, gridW, gridH, gridOffX, gridOffY, ftrH, canW: vw, canH: vh,
     miniArea: { x: miniLeft, y: miniTop, w: miniWidth, h: miniHeight },
   };
 }
@@ -1381,33 +1377,18 @@ function drawMiniBoardArea() {
   const actualCols = Math.min(cols, n);
   const usedW = actualCols * boardW + (actualCols - 1) * gap;
   const startX = areaX + Math.floor((areaW - usedW) / 2);
-  const startY = areaY + gap;
-
-  // Update animated positions (animate row index for smooth reordering)
-  for (let i = 0; i < shown.length; i++) {
-    const opp = shown[i];
-    let bp = boardPositions.get(opp.id);
-    if (!bp) {
-      bp = { currentIdx: i, targetIdx: i };
-      boardPositions.set(opp.id, bp);
-    }
-    bp.targetIdx = i;
-    bp.currentIdx += (bp.targetIdx - bp.currentIdx) * 0.12;
-    if (Math.abs(bp.currentIdx - bp.targetIdx) < 0.01) bp.currentIdx = bp.targetIdx;
-  }
+  const startY = Math.max(L.gridOffY, areaY + gap);
 
   // Draw boards in grid positions
   for (let i = 0; i < shown.length; i++) {
     const opp = shown[i];
-    const bp = boardPositions.get(opp.id);
-    const animIdx = bp ? bp.currentIdx : i;
 
-    // Use target column (snaps), animated row (smooth vertical slide)
-    const targetCol = i % actualCols;
-    const animRowSmooth = animIdx / actualCols;
+    // Column and row from grid index — no fractional animation
+    const col = i % actualCols;
+    const row = Math.floor(i / actualCols);
 
-    const bx = startX + targetCol * (boardW + gap);
-    const by = startY + animRowSmooth * (slotH + gap);
+    const bx = startX + col * (boardW + gap);
+    const by = startY + row * (slotH + gap);
 
     if (by + slotH < areaY || by > areaY + areaH) continue;
 
@@ -1429,7 +1410,7 @@ function drawBanners() {
     const bw = Math.min(350, L.canW * 0.35);
     const bh = 32;
     const bx = L.canW / 2 - bw / 2;
-    const by = L.hudH + 10 + i * (bh + 4);
+    const by = (L.gridOffY || 10) + 10 + i * (bh + 4);
 
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -1505,74 +1486,73 @@ function drawBanners() {
 
 // ── HUD for multiplayer ───────────────────────────────────────────────────────
 function drawMultiplayerHUD() {
-  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh, hudH, ftrH, canW, canH, cell } = L;
+  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh, ftrH, canW, canH, cell } = L;
   const accent = S.accent || '#7b7bff';
+  const totalH = gh + cell;
 
-  // Top bar
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fillRect(0, 0, canW, oy - 4);
+  // Left-side stat panels (stacked vertically)
+  const panelW = Math.min(120, Math.max(70, (ox - 16)));
+  const panelH = Math.min(60, totalH * 0.16);
+  const panelGap = 6;
 
-  ctx.save();
-  ctx.strokeStyle = rgba(accent, 0.5);
-  ctx.lineWidth = 1;
-  ctx.shadowColor = accent;
-  ctx.shadowBlur = 8;
-  ctx.beginPath(); ctx.moveTo(0, oy - 4); ctx.lineTo(canW, oy - 4); ctx.stroke();
-  ctx.restore();
-
-  const labelSz = Math.max(9, hudH * 0.26) | 0;
-  const valueSz = Math.max(13, hudH * 0.44) | 0;
-  const midY = oy * 0.52;
-
-  const myPlacement = S.placement || (aliveCount <= totalPlayers ? '#' + aliveCount : '');
-  const stats = [
-    { label: 'ALIVE', val: `${aliveCount}/${totalPlayers}`, hi: false },
-    { label: 'SCORE', val: S.score.toLocaleString(), hi: false },
-    { label: 'LEVEL', val: String(S.level), hi: true },
-    { label: 'LINES', val: String(S.lines), hi: false },
-  ];
-
-  const padX = Math.max(16, canW * 0.03);
-  const step = (canW - padX * 2) / stats.length;
-  stats.forEach((st, i) => {
-    const x = padX + step * i + step / 2;
+  function drawPanel(x, y, label, value, highlighted) {
+    ctx.fillStyle = 'rgba(4,4,20,0.82)';
+    ctx.fillRect(x, y, panelW, panelH);
+    ctx.strokeStyle = rgba(accent, 0.35);
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, panelW, panelH);
+    ctx.fillStyle = accent;
+    ctx.fillRect(x, y, panelW, 2);
+    const lblSz = Math.max(8, panelW * 0.09) | 0;
+    const valSz = Math.max(14, panelW * 0.18) | 0;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = rgba(accent, 0.7);
+    ctx.font = `bold ${lblSz}px Arial`;
+    ctx.fillText(label, x + 6, y + lblSz + 6);
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.font = `bold ${labelSz}px Arial`;
-    ctx.fillText(st.label, x, midY - valueSz * 0.1);
-    if (st.hi) {
+    if (highlighted) {
       ctx.save();
       ctx.fillStyle = accent;
       ctx.shadowColor = accent;
       ctx.shadowBlur = 10;
-      ctx.font = `bold ${valueSz}px Arial`;
-      ctx.fillText(st.val, x, midY + valueSz * 0.9);
+      ctx.font = `bold ${valSz}px Arial`;
+      ctx.fillText(value, x + panelW / 2, y + panelH - 8);
       ctx.restore();
     } else {
       ctx.fillStyle = '#fff';
-      ctx.font = `bold ${valueSz}px Arial`;
-      ctx.fillText(st.val, x, midY + valueSz * 0.9);
+      ctx.font = `bold ${valSz}px Arial`;
+      ctx.fillText(value, x + panelW / 2, y + panelH - 8);
     }
-  });
+  }
 
-  // Footer
-  const ftrTop = oy + gh + cell + 4;
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.fillRect(0, ftrTop, canW, canH - ftrTop);
+  const lx = ox - panelW - 10;
+  if (lx > 2) {
+    const stats = [
+      { label: 'ALIVE', value: `${aliveCount}/${totalPlayers}`, hi: false },
+      { label: 'SCORE', value: S.score.toLocaleString(), hi: false },
+      { label: 'LEVEL', value: String(S.level), hi: true },
+      { label: 'LINES', value: String(S.lines), hi: false },
+    ];
+    stats.forEach((st, i) => {
+      drawPanel(lx, oy + i * (panelH + panelGap), st.label, st.value, st.hi);
+    });
+  }
+
+  // Footer bar
+  const ftrTop = canH - ftrH;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, ftrTop, canW, ftrH);
   ctx.save();
-  ctx.strokeStyle = rgba(accent, 0.35);
+  ctx.strokeStyle = rgba(accent, 0.3);
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, ftrTop); ctx.lineTo(canW, ftrTop); ctx.stroke();
   ctx.restore();
-
   const ftr = Math.max(9, ftrH * 0.42) | 0;
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,0.3)';
   ctx.font = `${ftr}px Arial`;
   const controls = mode === 'spectating' ? 'Spectating...' : '←→↑↓  move    Z / SPC  swap    M  mute';
   ctx.fillText(controls, canW / 2, ftrTop + ftrH * 0.55);
-
-  // Track name + volume slider
   const trackName = music.currentName;
   if (trackName) {
     const noteSz = Math.max(8, ftrH * 0.34) | 0;
@@ -2159,71 +2139,69 @@ function drawResultsScreen() {
 
 // ── Solo HUD ──────────────────────────────────────────────────────────────────
 function drawSoloHUD() {
-  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh, hudH, ftrH, canW, canH, cell } = L;
+  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh, ftrH, canW, canH, cell } = L;
   const accent = S.accent || '#7b7bff';
+  const totalH = gh + cell;
 
-  // Top bar
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.fillRect(0, 0, canW, oy - 4);
+  // Side panel helper
+  const panelW = Math.min(140, Math.max(80, (ox - 20)));
+  const panelH = Math.min(80, totalH * 0.22);
 
-  ctx.save();
-  ctx.strokeStyle = rgba(accent, 0.5);
-  ctx.lineWidth = 1;
-  ctx.shadowColor = accent;
-  ctx.shadowBlur = 8;
-  ctx.beginPath(); ctx.moveTo(0, oy - 4); ctx.lineTo(canW, oy - 4); ctx.stroke();
-  ctx.restore();
-
-  const labelSz = Math.max(10, hudH * 0.28) | 0;
-  const valueSz = Math.max(15, hudH * 0.48) | 0;
-  const midY = oy * 0.52;
-
-  const stats = [
-    { label: 'SCORE', val: S.score.toLocaleString(), hi: false },
-    { label: 'BEST',  val: S.hi.toLocaleString(),    hi: false },
-    { label: 'LEVEL', val: String(S.level),           hi: true  },
-    { label: 'LINES', val: String(S.lines),           hi: false },
-  ];
-  const padX = Math.max(24, canW * 0.06);
-  const step = (canW - padX * 2) / stats.length;
-  stats.forEach((st, i) => {
-    const x = padX + step * i + step / 2;
+  function drawPanel(x, y, label, value, highlighted) {
+    ctx.fillStyle = 'rgba(4,4,20,0.82)';
+    ctx.fillRect(x, y, panelW, panelH);
+    ctx.strokeStyle = rgba(accent, 0.35);
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, panelW, panelH);
+    ctx.fillStyle = accent;
+    ctx.fillRect(x, y, panelW, 2);
+    const lblSz = Math.max(9, panelW * 0.085) | 0;
+    const valSz = Math.max(18, panelW * 0.2) | 0;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = rgba(accent, 0.7);
+    ctx.font = `bold ${lblSz}px Arial`;
+    ctx.fillText(label, x + 8, y + lblSz + 8);
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.font = `bold ${labelSz}px Arial`;
-    ctx.fillText(st.label, x, midY - valueSz * 0.1);
-    if (st.hi) {
+    if (highlighted) {
       ctx.save();
       ctx.fillStyle = accent;
       ctx.shadowColor = accent;
       ctx.shadowBlur = 10;
-      ctx.font = `bold ${valueSz}px Arial`;
-      ctx.fillText(st.val, x, midY + valueSz * 0.9);
+      ctx.font = `bold ${valSz}px Arial`;
+      ctx.fillText(value, x + panelW / 2, y + panelH - 12);
       ctx.restore();
     } else {
       ctx.fillStyle = '#fff';
-      ctx.font = `bold ${valueSz}px Arial`;
-      ctx.fillText(st.val, x, midY + valueSz * 0.9);
+      ctx.font = `bold ${valSz}px Arial`;
+      ctx.fillText(value, x + panelW / 2, y + panelH - 12);
     }
-  });
+  }
 
-  // Footer
-  const ftrTop = oy + gh + cell + 4;
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.fillRect(0, ftrTop, canW, canH - ftrTop);
+  const lx = ox - panelW - 12;
+  if (lx > 4) {
+    drawPanel(lx, oy, 'LEVEL', String(S.level), true);
+    drawPanel(lx, oy + totalH - panelH, 'LINES', String(S.lines), false);
+  }
+  const rx = ox + gw + 12;
+  if (rx + panelW < canW - 4) {
+    drawPanel(rx, oy, 'SCORE', S.score.toLocaleString(), false);
+    drawPanel(rx, oy + totalH - panelH, 'BEST', S.hi.toLocaleString(), false);
+  }
+
+  // Footer bar
+  const ftrTop = canH - ftrH;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, ftrTop, canW, ftrH);
   ctx.save();
-  ctx.strokeStyle = rgba(accent, 0.35);
+  ctx.strokeStyle = rgba(accent, 0.3);
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, ftrTop); ctx.lineTo(canW, ftrTop); ctx.stroke();
   ctx.restore();
-
   const ftr = Math.max(10, ftrH * 0.42) | 0;
   ctx.textAlign = 'center';
   ctx.fillStyle = 'rgba(255,255,255,0.3)';
   ctx.font = `${ftr}px Arial`;
-  ctx.fillText('←→↑↓  move    Z / SPC  swap    P  pause    M  mute    R  restart    ESC  menu', canW / 2, ftrTop + ftrH * 0.45);
-
-  // Track name + volume slider
+  ctx.fillText('←→↑↓  move    Z / SPC  swap    P  pause    M  mute    R  restart    ESC  menu', canW / 2, ftrTop + ftrH * 0.55);
   const trackName = music.currentName;
   if (trackName) {
     const noteSz = Math.max(9, ftrH * 0.36) | 0;
@@ -2231,9 +2209,8 @@ function drawSoloHUD() {
     ctx.textAlign = 'left';
     ctx.fillStyle = rgba(accent, pulse);
     ctx.font = `${noteSz}px Arial`;
-    ctx.fillText(`♪ ${trackName}`, ox, ftrTop + ftrH * 0.82);
+    ctx.fillText(`♪ ${trackName}`, 10, ftrTop + ftrH * 0.82);
   }
-  // Volume slider in footer right
   const slW = Math.min(100, canW * 0.1);
   const slH = Math.max(16, ftrH * 0.5);
   drawVolumeSlider(canW - slW - 16, ftrTop + (ftrH - slH) / 2, slW, slH, accent);

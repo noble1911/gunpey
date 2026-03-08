@@ -116,25 +116,24 @@ const music = (() => {
 })();
 
 // ── Layout ────────────────────────────────────────────────────────────────────
-// Grid is centred on screen. A HUD strip sits above, controls hint below.
+// Grid is centred on screen with side panels. Thin footer at bottom.
 let L = {};
 
 function computeLayout() {
   const vw = window.innerWidth, vh = window.innerHeight;
-  const hudH = Math.max(50, Math.floor(vh * 0.09));   // score strip above grid
-  const ftrH = Math.max(28, Math.floor(vh * 0.05));   // controls hint below grid
-  // Account for ROWS + 1 cells (grid rows + incoming row below)
+  const ftrH = Math.max(28, Math.floor(vh * 0.04));
   const totalRows = ROWS + 1;
-  const byH  = Math.floor((vh - hudH - ftrH - 16) / totalRows);
-  const byW  = Math.floor(vw * 0.58 / COLS);
-  const cell = Math.max(36, Math.min(byH, byW, 96));
+  // Board centered in full viewport minus footer
+  const maxCellH = Math.floor((vh - ftrH - 24) / totalRows);
+  const maxCellW = Math.floor((vw * 0.5) / COLS);  // board takes ~50% width
+  const cell = Math.max(36, Math.min(maxCellH, maxCellW, 96));
   const gridW = COLS * cell;
   const gridH = ROWS * cell;
   const gridOffX = Math.floor((vw - gridW) / 2);
-  const gridOffY = Math.floor(hudH + (vh - hudH - ftrH - totalRows * cell) / 2);
+  const gridOffY = Math.floor((vh - ftrH - totalRows * cell) / 2);
   canvas.width  = vw;
   canvas.height = vh;
-  L = { cell, gridW, gridH, gridOffX, gridOffY, hudH, ftrH, canW: vw, canH: vh };
+  L = { cell, gridW, gridH, gridOffX, gridOffY, ftrH, canW: vw, canH: vh };
 }
 window.addEventListener('resize', computeLayout);
 computeLayout();
@@ -663,99 +662,103 @@ function drawFrame() {
   ctx.restore();
 }
 
-// ── Draw HUD (score strip above grid, controls below) ─────────────────────────
+// ── Draw HUD (side panels + footer) ────────────────────────────────────────────
 function drawHUD() {
-  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh, hudH, ftrH, canW, canH } = L;
+  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh, ftrH, canW, canH, cell } = L;
   const accent = S.accent;
+  const totalH = gh + cell; // grid + incoming row
 
-  // ── Score panel above grid ──────────────────────────────────────────────────
-  // Semi-transparent backing strip spanning full width
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.fillRect(0, 0, canW, oy - 4);
+  // ── Side Panel helper ──
+  const panelW = Math.min(140, Math.max(80, (ox - 20)));
+  const panelH = Math.min(80, totalH * 0.22);
+  const panelGap = 8;
 
-  // Thin accent line separating HUD from grid
-  ctx.save();
-  ctx.strokeStyle = rgba(accent, 0.5);
-  ctx.lineWidth   = 1;
-  ctx.shadowColor = accent;
-  ctx.shadowBlur  = 8;
-  ctx.beginPath(); ctx.moveTo(0, oy - 4); ctx.lineTo(canW, oy - 4); ctx.stroke();
-  ctx.restore();
+  function drawPanel(x, y, label, value, highlighted) {
+    ctx.fillStyle = 'rgba(4,4,20,0.82)';
+    ctx.fillRect(x, y, panelW, panelH);
+    ctx.strokeStyle = rgba(accent, 0.35);
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, panelW, panelH);
+    // Accent top edge
+    ctx.fillStyle = accent;
+    ctx.fillRect(x, y, panelW, 2);
 
-  const labelSz = Math.max(10, hudH * 0.28) | 0;
-  const valueSz = Math.max(15, hudH * 0.48) | 0;
-  const midY    = oy * 0.52;
+    const lblSz = Math.max(9, panelW * 0.085) | 0;
+    const valSz = Math.max(18, panelW * 0.2) | 0;
 
-  // Four stats spread across the full screen width (not just the grid)
-  // so large numbers never overlap.
-  const stats = [
-    { label: 'SCORE', val: S.score.toLocaleString(), hi: false },
-    { label: 'BEST',  val: S.hi.toLocaleString(),    hi: false },
-    { label: 'LEVEL', val: String(S.level),           hi: true  },
-    { label: 'LINES', val: String(S.lines),           hi: false },
-  ];
-  const padX = Math.max(24, canW * 0.06);
-  const step  = (canW - padX * 2) / stats.length;
-  stats.forEach((st, i) => {
-    const x = padX + step * i + step / 2;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = rgba(accent, 0.7);
+    ctx.font = `bold ${lblSz}px Arial`;
+    ctx.fillText(label, x + 8, y + lblSz + 8);
+
     ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.font = `bold ${labelSz}px Arial`;
-    ctx.fillText(st.label, x, midY - valueSz * 0.1);
-    if (st.hi) {
+    if (highlighted) {
       ctx.save();
-      ctx.fillStyle   = accent;
+      ctx.fillStyle = accent;
       ctx.shadowColor = accent;
-      ctx.shadowBlur  = 10;
-      ctx.font = `bold ${valueSz}px Arial`;
-      ctx.fillText(st.val, x, midY + valueSz * 0.9);
+      ctx.shadowBlur = 10;
+      ctx.font = `bold ${valSz}px Arial`;
+      ctx.fillText(value, x + panelW / 2, y + panelH - 12);
       ctx.restore();
     } else {
-      ctx.fillStyle = '#ffffff';
-      ctx.font = `bold ${valueSz}px Arial`;
-      ctx.fillText(st.val, x, midY + valueSz * 0.9);
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${valSz}px Arial`;
+      ctx.fillText(value, x + panelW / 2, y + panelH - 12);
     }
-  });
+  }
 
-  // ── Controls hint below grid + incoming row ─────────────────────────────────
-  const ftrTop = oy + L.gridH + L.cell + 4;   // below the incoming row
-  ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.fillRect(0, ftrTop, canW, canH - ftrTop);
+  // Left panels
+  const lx = ox - panelW - 12;
+  if (lx > 4) {
+    drawPanel(lx, oy, 'LEVEL', String(S.level), true);
+    drawPanel(lx, oy + totalH - panelH, 'LINES', String(S.lines), false);
+  }
 
+  // Right panels
+  const rx = ox + gw + 12;
+  if (rx + panelW < canW - 4) {
+    drawPanel(rx, oy, 'SCORE', S.score.toLocaleString(), false);
+    drawPanel(rx, oy + totalH - panelH, 'BEST', S.hi.toLocaleString(), false);
+  }
+
+  // ── Footer bar ──
+  const ftrTop = canH - ftrH;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, ftrTop, canW, ftrH);
   ctx.save();
-  ctx.strokeStyle = rgba(accent, 0.35);
-  ctx.lineWidth   = 1;
+  ctx.strokeStyle = rgba(accent, 0.3);
+  ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, ftrTop); ctx.lineTo(canW, ftrTop); ctx.stroke();
   ctx.restore();
 
   const ftr = Math.max(10, ftrH * 0.42) | 0;
-  ctx.textAlign  = 'center';
-  ctx.fillStyle  = 'rgba(255,255,255,0.3)';
-  ctx.font       = `${ftr}px Arial`;
-  ctx.fillText('←→↑↓  move    Z / SPC  swap    P  pause    M  mute    R  restart', canW / 2, ftrTop + ftrH * 0.45);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = `${ftr}px Arial`;
+  ctx.fillText('←→↑↓  move    Z / SPC  swap    P  pause    M  mute    R  restart', canW / 2, ftrTop + ftrH * 0.55);
 
-  // Now-playing strip
+  // Music name (left)
   const trackName = music.currentName;
   if (trackName) {
     const noteSz = Math.max(9, ftrH * 0.36) | 0;
-    const pulse  = music.paused ? 0.25 : (0.45 + 0.2 * Math.sin(S.frame * 0.06));
-    ctx.textAlign  = 'right';
-    ctx.fillStyle  = rgba(S.accent, pulse);
-    ctx.font       = `${noteSz}px Arial`;
-    ctx.fillText(`♪  ${trackName}`, ox + gw, ftrTop + ftrH * 0.82);
+    const pulse = music.paused ? 0.25 : (0.45 + 0.2 * Math.sin(S.frame * 0.06));
+    ctx.textAlign = 'left';
+    ctx.fillStyle = rgba(accent, pulse);
+    ctx.font = `${noteSz}px Arial`;
+    ctx.fillText(`♪  ${trackName}`, 10, ftrTop + ftrH * 0.82);
   }
 
-  // Combo message (floats above grid, fades out)
+  // ── Combo message ──
   if (S.comboTimer > 0) {
     const alpha = Math.min(1, S.comboTimer / 30);
     const rise  = (120 - S.comboTimer) * 0.4;
-    const fCombo = Math.max(18, Math.min(L.cell * 0.65, 40)) | 0;
+    const fCombo = Math.max(18, Math.min(cell * 0.65, 40)) | 0;
     ctx.save();
     ctx.textAlign   = 'center';
     ctx.globalAlpha = alpha;
-    ctx.shadowColor = S.accent;
+    ctx.shadowColor = accent;
     ctx.shadowBlur  = 20;
-    ctx.fillStyle   = S.accent;
+    ctx.fillStyle   = accent;
     ctx.font        = `bold ${fCombo}px Arial`;
     ctx.fillText(S.comboMsg, ox + gw / 2, oy + gh / 2 - rise);
     ctx.restore();
