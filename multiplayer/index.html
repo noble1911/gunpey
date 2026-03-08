@@ -311,7 +311,7 @@ function initState() {
   S = {
     grid,
     nextRow:       makeRow(),
-    pushCountdown: 720,
+    pushCountdown: 1200,
     curR:          Math.floor(ROWS / 2) - 1,
     curC:          2,
     score:         0,
@@ -427,9 +427,12 @@ function updateFlash() {
 }
 
 // ── Push timing ───────────────────────────────────────────────────────────────
+// Push speed: starts slow, gradually speeds up with score.
+// At 60fps: 1200f = 20s start, floors at 480f = 8s at high score.
+// Ramp is gradual — takes 30k score to reach max speed.
 function pushInterval() {
-  const t = Math.min(S.score / 10000, 1);
-  return Math.round(720 - 560 * t);
+  const t = Math.min(S.score / 30000, 1);
+  return Math.round(1200 - 720 * t);
 }
 
 function updateScroll() {
