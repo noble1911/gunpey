@@ -207,6 +207,12 @@ const opponents = new Map();
 let aliveCount = 0;
 let totalPlayers = 0;
 
+// Animated board positions: id → {targetIdx, currentY, lastIdx}
+const boardPositions = new Map();
+// Notification banners
+let banners = []; // [{text, color, timer, maxTimer}]
+let winnerBanner = null; // {winner, placement, timer}
+
 // Menu button areas (computed each frame)
 let menuButtons = [];
 let browserButtons = [];
@@ -488,6 +494,9 @@ function connectWS() {
         totalPlayers = msg.players.length;
         aliveCount = totalPlayers;
         opponents.clear();
+        boardPositions.clear();
+        banners = [];
+        winnerBanner = null;
         for (const p of msg.players) {
           if (p.id !== myPlayerId) {
             opponents.set(p.id, { ...p, score: 0, lines: 0, level: 1, grid: '', alive: true });
@@ -536,6 +545,11 @@ function connectWS() {
         if (msg.id === myPlayerId) {
           S.placement = msg.placement;
         }
+        banners.push({
+          text: `${msg.name} eliminated! #${msg.placement}`,
+          color: msg.id === myPlayerId ? '#ff5555' : '#ff9500',
+          timer: 180, maxTimer: 180,
+        });
         break;
 
       case 'gameEnd':
@@ -544,13 +558,25 @@ function connectWS() {
           S.placement = 1;
           sfx.play('win');
         }
-        mode = 'results';
-        computeLayout();
+        winnerBanner = {
+          winner: msg.winner ? msg.winner.name : '???',
+          placement: S.placement || '?',
+          isMe: msg.winner && msg.winner.id === myPlayerId,
+          timer: 360,
+        };
+        // Delay going to results so they see the banner
+        setTimeout(() => {
+          mode = 'results';
+          computeLayout();
+        }, 5000);
         break;
 
       case 'returnToLobby':
         lobbyPlayers = msg.players;
         opponents.clear();
+        boardPositions.clear();
+        banners = [];
+        winnerBanner = null;
         mode = 'lobby';
         computeLayout();
         break;
@@ -958,20 +984,25 @@ function drawFrame() {
 }
 
 // ── Mini-Board Rendering ──────────────────────────────────────────────────────
-function drawMiniBoard(opp, x, y, w, h) {
+function drawMiniBoard(opp, x, y, boardW, boardH, labelH, rank) {
+  const totalH = boardH + labelH;
+
   // Background
-  ctx.fillStyle = 'rgba(8,8,24,0.85)';
-  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = 'rgba(8,8,24,0.88)';
+  ctx.fillRect(x, y, boardW, boardH);
 
-  // Border: red if dead, green if alive
-  ctx.strokeStyle = opp.alive ? 'rgba(100,255,100,0.5)' : 'rgba(255,60,60,0.5)';
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(x, y, w, h);
+  // Border: red if dead, green if alive, thicker for top 3
+  const borderW = rank <= 3 ? 2 : 1.5;
+  ctx.strokeStyle = opp.alive
+    ? (rank === 1 ? 'rgba(255,215,0,0.7)' : rank <= 3 ? 'rgba(100,255,100,0.6)' : 'rgba(100,255,100,0.35)')
+    : 'rgba(255,60,60,0.4)';
+  ctx.lineWidth = borderW;
+  ctx.strokeRect(x, y, boardW, boardH);
 
-  // Draw grid cells
+  // Draw grid cells with correct aspect ratio
   if (opp.grid && opp.grid.length === ROWS * COLS) {
-    const cellW = w / COLS;
-    const cellH = (h - 14) / ROWS; // leave room for name label
+    const cellW = boardW / COLS;
+    const cellH = boardH / ROWS;
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const ch = opp.grid[r * COLS + c];
@@ -985,27 +1016,47 @@ function drawMiniBoard(opp, x, y, w, h) {
 
   // Dead overlay
   if (!opp.alive) {
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(x, y, w, h);
-    ctx.fillStyle = '#ff4444';
-    ctx.font = `bold ${Math.max(8, w * 0.18)}px Arial`;
-    ctx.textAlign = 'center';
-    ctx.fillText('DEAD', x + w / 2, y + h / 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(x, y, boardW, boardH);
+    // Red X
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,50,50,0.6)';
+    ctx.lineWidth = Math.max(2, boardW * 0.06);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x + boardW * 0.2, y + boardH * 0.2);
+    ctx.lineTo(x + boardW * 0.8, y + boardH * 0.8);
+    ctx.moveTo(x + boardW * 0.8, y + boardH * 0.2);
+    ctx.lineTo(x + boardW * 0.2, y + boardH * 0.8);
+    ctx.stroke();
+    ctx.restore();
   }
 
-  // Name label
-  ctx.fillStyle = opp.alive ? '#ccc' : '#666';
-  ctx.font = `${Math.max(8, Math.min(11, w * 0.14))}px Arial`;
-  ctx.textAlign = 'center';
+  // Labels below board
+  const nameSz = Math.max(8, Math.min(11, boardW * 0.16));
+  const scoreSz = Math.max(7, Math.min(10, boardW * 0.13));
   const nameStr = opp.name || '???';
-  ctx.fillText(nameStr.length > 8 ? nameStr.slice(0, 7) + '.' : nameStr, x + w / 2, y + h - 2);
+  const displayName = nameStr.length > 10 ? nameStr.slice(0, 9) + '.' : nameStr;
+
+  ctx.textAlign = 'center';
+  const cx = x + boardW / 2;
+
+  // Rank number + name
+  ctx.fillStyle = opp.alive ? '#ddd' : '#666';
+  ctx.font = `bold ${nameSz}px Arial`;
+  ctx.fillText(`#${rank} ${displayName}`, cx, y + boardH + nameSz + 1);
+
+  // Score
+  ctx.fillStyle = opp.alive ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.2)';
+  ctx.font = `${scoreSz}px Arial`;
+  ctx.fillText(opp.score.toLocaleString(), cx, y + boardH + nameSz + scoreSz + 3);
 }
 
 function drawMiniBoardArea() {
   if (!L.miniArea) return;
   const { x: areaX, y: areaY, w: areaW, h: areaH } = L.miniArea;
 
-  // Get top 20 opponents to display (prioritize alive, then by score)
+  // Sort opponents: alive first, then by score descending
   const opps = [...opponents.values()];
   opps.sort((a, b) => {
     if (a.alive !== b.alive) return a.alive ? -1 : 1;
@@ -1013,18 +1064,157 @@ function drawMiniBoardArea() {
   });
   const shown = opps.slice(0, 20);
 
+  // Compute board size maintaining 1:2 aspect ratio (5 cols, 10 rows)
   const cols = 4;
-  const rows = 5;
-  const gap = 4;
-  const bw = Math.floor((areaW - gap * (cols + 1)) / cols);
-  const bh = Math.floor((areaH - gap * (rows + 1)) / rows);
+  const maxRows = 5;
+  const gap = 5;
+  const labelH = 26; // space for name + score below each board
 
+  // Available width per board
+  const availW = (areaW - gap * (cols + 1)) / cols;
+  // Board height = 2 * board width (1:2 ratio), plus label space
+  const totalSlotH = availW * 2 + labelH;
+  // How many rows fit?
+  const fittingRows = Math.min(maxRows, Math.floor((areaH - gap) / (totalSlotH + gap)));
+  const numRows = Math.max(1, fittingRows);
+
+  // If boards are too tall, constrain by height
+  const maxTotalH = (areaH - gap * (numRows + 1)) / numRows;
+  let boardW = availW;
+  let boardH = boardW * 2;
+  if (boardH + labelH > maxTotalH) {
+    boardH = maxTotalH - labelH;
+    boardW = boardH / 2;
+  }
+
+  const slotW = boardW;
+  const slotH = boardH + labelH;
+
+  // Center boards horizontally within available columns
+  const usedW = cols * slotW + (cols - 1) * gap;
+  const startX = areaX + (areaW - usedW) / 2;
+
+  // Update animated positions
   for (let i = 0; i < shown.length; i++) {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const bx = areaX + gap + col * (bw + gap);
-    const by = areaY + gap + row * (bh + gap);
-    drawMiniBoard(shown[i], bx, by, bw, bh);
+    const opp = shown[i];
+    let bp = boardPositions.get(opp.id);
+    if (!bp) {
+      bp = { currentY: i, targetIdx: i };
+      boardPositions.set(opp.id, bp);
+    }
+    bp.targetIdx = i;
+    // Smooth lerp toward target
+    bp.currentY += (bp.targetIdx - bp.currentY) * 0.12;
+    // Snap if close enough
+    if (Math.abs(bp.currentY - bp.targetIdx) < 0.01) bp.currentY = bp.targetIdx;
+  }
+
+  // Draw boards using animated Y positions
+  for (let i = 0; i < shown.length; i++) {
+    const opp = shown[i];
+    const bp = boardPositions.get(opp.id);
+    const animIdx = bp ? bp.currentY : i;
+
+    const col = Math.floor(animIdx) % cols;
+    const rowFrac = animIdx / cols;
+
+    // For smooth animation: use fractional row position
+    const targetCol = i % cols;
+    const targetRow = Math.floor(i / cols);
+    const bx = startX + targetCol * (slotW + gap);
+    const by = areaY + gap + rowFrac * (slotH + gap);
+
+    if (by + slotH < areaY || by > areaY + areaH) continue; // off screen
+
+    const rank = i + 1;
+    drawMiniBoard(opp, bx, by, boardW, boardH, labelH, rank);
+  }
+}
+
+// ── Banners & Winner Overlay ──────────────────────────────────────────────────
+function drawBanners() {
+  // Elimination banners (stacked from top)
+  const toRemove = [];
+  for (let i = 0; i < banners.length; i++) {
+    const b = banners[i];
+    b.timer--;
+    if (b.timer <= 0) { toRemove.push(i); continue; }
+
+    const alpha = Math.min(1, b.timer / 30, (b.maxTimer - b.timer) < 20 ? (b.maxTimer - b.timer) / 20 : 1);
+    const bw = Math.min(350, L.canW * 0.35);
+    const bh = 32;
+    const bx = L.canW / 2 - bw / 2;
+    const by = L.hudH + 10 + i * (bh + 4);
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = b.color;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.fillStyle = b.color;
+    ctx.font = 'bold 13px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(b.text, L.canW / 2, by + bh / 2 + 5);
+    ctx.restore();
+  }
+  for (let i = toRemove.length - 1; i >= 0; i--) banners.splice(toRemove[i], 1);
+
+  // Winner banner (full-screen overlay)
+  if (winnerBanner && winnerBanner.timer > 0) {
+    winnerBanner.timer--;
+    const wb = winnerBanner;
+    const alpha = Math.min(1, wb.timer / 40, (360 - wb.timer) < 30 ? (360 - wb.timer) / 30 : 1);
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    // Darken background
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, L.canW, L.canH);
+
+    // Banner box
+    const boxW = Math.min(500, L.canW * 0.6);
+    const boxH = 140;
+    const boxX = L.canW / 2 - boxW / 2;
+    const boxY = L.canH / 2 - boxH / 2 - 20;
+
+    ctx.fillStyle = 'rgba(4,4,30,0.95)';
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+
+    const borderClr = wb.isMe ? '#39ff14' : '#7b7bff';
+    ctx.strokeStyle = borderClr;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = borderClr;
+    ctx.shadowBlur = 20;
+    ctx.strokeRect(boxX, boxY, boxW, boxH);
+    ctx.shadowBlur = 0;
+
+    ctx.textAlign = 'center';
+    const cx = L.canW / 2;
+
+    // "WINNER!"
+    ctx.fillStyle = '#ffd700';
+    ctx.shadowColor = '#ffd700';
+    ctx.shadowBlur = 15;
+    ctx.font = `bold ${Math.min(36, boxW * 0.08)}px Arial`;
+    ctx.fillText('WINNER!', cx, boxY + 40);
+    ctx.shadowBlur = 0;
+
+    // Winner name
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${Math.min(28, boxW * 0.06)}px Arial`;
+    ctx.fillText(wb.winner, cx, boxY + 75);
+
+    // Your placement
+    const suffix = wb.placement === 1 ? 'st' : wb.placement === 2 ? 'nd' : wb.placement === 3 ? 'rd' : 'th';
+    const placeText = wb.isMe ? 'You won!' : `You placed ${wb.placement}${suffix}`;
+    ctx.fillStyle = wb.isMe ? '#39ff14' : 'rgba(255,255,255,0.7)';
+    ctx.font = `${Math.min(18, boxW * 0.04)}px Arial`;
+    ctx.fillText(placeText, cx, boxY + 110);
+
+    ctx.restore();
   }
 }
 
@@ -1740,6 +1930,7 @@ function render() {
       drawFrame();
       drawMiniBoardArea();
       drawMultiplayerHUD();
+      drawBanners();
 
       if (mode === 'spectating') {
         ctx.save();
