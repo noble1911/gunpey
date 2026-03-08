@@ -1271,13 +1271,11 @@ function drawMiniBoardArea() {
 
   const slotH = boardH + labelH;
 
-  // Center the grid within the area
+  // Center horizontally, anchor to top vertically
   const actualCols = Math.min(cols, n);
-  const actualRows = Math.ceil(n / actualCols);
   const usedW = actualCols * boardW + (actualCols - 1) * gap;
-  const usedH = actualRows * slotH + (actualRows - 1) * gap;
   const startX = areaX + Math.floor((areaW - usedW) / 2);
-  const startY = areaY + Math.floor((areaH - usedH) / 2);
+  const startY = areaY + gap;
 
   // Update animated positions (animate row index for smooth reordering)
   for (let i = 0; i < shown.length; i++) {
