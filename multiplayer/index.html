@@ -264,8 +264,8 @@ function drawMenuParticles(canW, canH) {
     switch (p.tile) {
       case '/':  ctx.moveTo(x, y + s); ctx.lineTo(x + s, y); break;
       case '\\': ctx.moveTo(x, y); ctx.lineTo(x + s, y + s); break;
-      case '^':  ctx.moveTo(x, y + s); ctx.lineTo(x + s/2, y + s*0.5); ctx.lineTo(x + s, y + s); break;
-      case 'v':  ctx.moveTo(x, y); ctx.lineTo(x + s/2, y + s*0.5); ctx.lineTo(x + s, y); break;
+      case '^':  ctx.moveTo(x, y + s); ctx.lineTo(x + s/2, y); ctx.lineTo(x + s, y + s); break;
+      case 'v':  ctx.moveTo(x, y); ctx.lineTo(x + s/2, y + s); ctx.lineTo(x + s, y); break;
     }
     ctx.stroke();
     ctx.restore();
@@ -1024,8 +1024,8 @@ function drawTile(tile, px, py, glowing, flashPhase) {
   switch (tile) {
     case '/':  ctx.moveTo(BL_x, BL_y); ctx.lineTo(TR_x, TR_y); break;
     case '\\': ctx.moveTo(TL_x, TL_y); ctx.lineTo(BR_x, BR_y); break;
-    case '^':  ctx.moveTo(BL_x, BL_y); ctx.lineTo(cx, py + cs * 0.5); ctx.lineTo(BR_x, BR_y); break;
-    case 'v':  ctx.moveTo(TL_x, TL_y); ctx.lineTo(cx, py + cs * 0.5); ctx.lineTo(TR_x, TR_y); break;
+    case '^':  ctx.moveTo(BL_x, BL_y); ctx.lineTo(cx, TL_y); ctx.lineTo(BR_x, BR_y); break;
+    case 'v':  ctx.moveTo(TL_x, TL_y); ctx.lineTo(cx, BL_y); ctx.lineTo(TR_x, TR_y); break;
   }
   ctx.stroke();
   ctx.restore();
@@ -1189,12 +1189,12 @@ function drawMiniTile(tile, px, py, cw, ch) {
       break;
     case '^':
       ctx.moveTo(px, py + ch);
-      ctx.lineTo(px + cw / 2, py + ch * 0.5);
+      ctx.lineTo(px + cw / 2, py);
       ctx.lineTo(px + cw, py + ch);
       break;
     case 'v':
       ctx.moveTo(px, py);
-      ctx.lineTo(px + cw / 2, py + ch * 0.5);
+      ctx.lineTo(px + cw / 2, py + ch);
       ctx.lineTo(px + cw, py);
       break;
   }
