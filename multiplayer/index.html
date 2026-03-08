@@ -146,23 +146,26 @@ function computeLayoutSingle(vw, vh) {
 
 function computeLayoutMultiplayer(vw, vh) {
   const hudH = Math.max(44, Math.floor(vh * 0.07));
-  const ftrH = Math.max(24, Math.floor(vh * 0.04));
+  const ftrH = Math.max(28, Math.floor(vh * 0.05));
   const totalRows = ROWS + 1;
-  // Player grid takes left 42%
-  const gridAreaW = Math.floor(vw * 0.42);
-  const byH = Math.floor((vh - hudH - ftrH - 16) / totalRows);
+  // Player grid takes left portion; leave right for mini-boards
+  const gridAreaW = Math.floor(vw * 0.45);
+  const playAreaTop = hudH + 4;
+  const playAreaBot = vh - ftrH - 4;
+  const playAreaH = playAreaBot - playAreaTop;
+  const byH = Math.floor((playAreaH - 8) / totalRows);
   const byW = Math.floor((gridAreaW - 40) / COLS);
   const cell = Math.max(28, Math.min(byH, byW, 80));
   const gridW = COLS * cell;
   const gridH = ROWS * cell;
-  const gridOffX = Math.floor((gridAreaW - gridW) / 2);
-  const gridOffY = Math.floor(hudH + (vh - hudH - ftrH - totalRows * cell) / 2);
+  const gridOffX = Math.max(8, Math.floor((gridAreaW - gridW) / 2));
+  const gridOffY = Math.floor(playAreaTop + (playAreaH - totalRows * cell) / 2);
 
-  // Mini-board area: right 58%
-  const miniLeft = gridAreaW;
-  const miniTop = hudH + 8;
-  const miniWidth = vw - gridAreaW - 8;
-  const miniHeight = vh - hudH - ftrH - 16;
+  // Mini-board area: right side, between HUD and footer
+  const miniLeft = gridOffX + gridW + cell;  // after the player grid + some margin
+  const miniTop = playAreaTop;
+  const miniWidth = vw - miniLeft - 8;
+  const miniHeight = playAreaH;
 
   L = {
     cell, gridW, gridH, gridOffX, gridOffY, hudH, ftrH, canW: vw, canH: vh,
@@ -1168,61 +1171,63 @@ function drawMiniBoardArea() {
   const shown = opps.slice(0, 20);
   if (shown.length === 0) return;
 
-  // Always lay out in a 4-column grid. Max board width is capped so even
-  // with 1 opponent the board stays small (like Tetris 99 side panels).
-  const cols = Math.min(4, shown.length);
-  const gridRows = Math.ceil(shown.length / cols);
-  const gap = 5;
-  const labelH = 26;
-  const MAX_BOARD_W = 80; // hard cap — never larger than this
+  // Fixed grid: 5 columns × 4 rows = 20 slots max
+  const cols = 5;
+  const rows = 4;
+  const gap = 4;
+  const labelH = 22;
 
-  // Size from available width
-  let boardW = Math.min(MAX_BOARD_W, (areaW - gap * (cols + 1)) / cols);
-  let boardH = boardW * 2; // 1:2 aspect ratio
+  // Compute board size to fit grid within area, maintaining 1:2 ratio
+  const maxBoardW = (areaW - gap * (cols + 1)) / cols;
+  const maxSlotH = (areaH - gap * (rows + 1)) / rows;
+  const maxBoardHFromH = maxSlotH - labelH;
 
-  // Constrain by available height
-  const maxSlotH = (areaH - gap * (gridRows + 1)) / gridRows;
-  if (boardH + labelH > maxSlotH) {
-    boardH = maxSlotH - labelH;
-    boardW = boardH / 2;
-  }
+  // Pick the smaller constraint
+  let boardW = Math.min(maxBoardW, maxBoardHFromH / 2);
+  let boardH = boardW * 2;
 
   // Ensure minimums
-  boardW = Math.max(20, boardW);
-  boardH = Math.max(40, boardH);
+  boardW = Math.max(16, boardW);
+  boardH = Math.max(32, boardH);
 
-  const slotW = boardW;
   const slotH = boardH + labelH;
 
-  // Position grid: top-left of the mini area
-  const usedW = cols * slotW + (cols - 1) * gap;
-  const startX = areaX + gap;
+  // Center the grid within the area
+  const usedW = cols * boardW + (cols - 1) * gap;
+  const usedH = rows * slotH + (rows - 1) * gap;
+  const startX = areaX + Math.floor((areaW - usedW) / 2);
+  const startY = areaY + Math.floor((areaH - usedH) / 2);
 
-  // Update animated positions
+  // Update animated positions (animate row index for smooth reordering)
   for (let i = 0; i < shown.length; i++) {
     const opp = shown[i];
     let bp = boardPositions.get(opp.id);
     if (!bp) {
-      bp = { currentY: i, targetIdx: i };
+      bp = { currentIdx: i, targetIdx: i };
       boardPositions.set(opp.id, bp);
     }
     bp.targetIdx = i;
-    bp.currentY += (bp.targetIdx - bp.currentY) * 0.12;
-    if (Math.abs(bp.currentY - bp.targetIdx) < 0.01) bp.currentY = bp.targetIdx;
+    bp.currentIdx += (bp.targetIdx - bp.currentIdx) * 0.12;
+    if (Math.abs(bp.currentIdx - bp.targetIdx) < 0.01) bp.currentIdx = bp.targetIdx;
   }
 
-  // Draw boards
+  // Draw boards in grid positions
   for (let i = 0; i < shown.length; i++) {
     const opp = shown[i];
     const bp = boardPositions.get(opp.id);
-    const animIdx = bp ? bp.currentY : i;
-    const rowFrac = animIdx / cols;
+    const animIdx = bp ? bp.currentIdx : i;
 
+    // Animated row from fractional index
+    const animCol = animIdx % cols;
+    const animRow = Math.floor(animIdx / cols) + (animIdx % cols - Math.floor(animIdx % cols));
+    // Use target column (snaps), animated row (smooth vertical slide)
     const targetCol = i % cols;
-    const bx = startX + targetCol * (slotW + gap);
-    const by = areaY + gap + rowFrac * (slotH + gap);
+    const animRowSmooth = animIdx / cols;
 
-    if (by + slotH < areaY || by > areaY + areaH) continue; // off screen
+    const bx = startX + targetCol * (boardW + gap);
+    const by = startY + animRowSmooth * (slotH + gap);
+
+    if (by + slotH < areaY || by > areaY + areaH) continue;
 
     const rank = i + 1;
     drawMiniBoard(opp, bx, by, boardW, boardH, labelH, rank);
