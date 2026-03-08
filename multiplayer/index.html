@@ -1247,19 +1247,22 @@ function drawMiniBoardArea() {
   const shown = opps.slice(0, 20);
   if (shown.length === 0) return;
 
-  // Fixed grid: 5 columns × 4 rows = 20 slots max
-  const cols = 5;
-  const rows = 4;
+  // Adaptive grid: pick columns based on opponent count and available width
   const gap = 4;
   const labelH = 22;
+  const n = shown.length;
+
+  // Choose columns: 1 → 1col, 2 → 2col, 3-4 → 2col, 5-6 → 3col, etc., max 5
+  const cols = Math.min(5, n <= 2 ? n : Math.ceil(Math.sqrt(n)));
+  const rows = Math.ceil(n / cols);
 
   // Compute board size to fit grid within area, maintaining 1:2 ratio
   const maxBoardW = (areaW - gap * (cols + 1)) / cols;
   const maxSlotH = (areaH - gap * (rows + 1)) / rows;
   const maxBoardHFromH = maxSlotH - labelH;
 
-  // Pick the smaller constraint
-  let boardW = Math.min(maxBoardW, maxBoardHFromH / 2);
+  // Pick the smaller constraint, cap max size so boards don't get huge
+  let boardW = Math.min(maxBoardW, maxBoardHFromH / 2, 120);
   let boardH = boardW * 2;
 
   // Ensure minimums
@@ -1269,8 +1272,10 @@ function drawMiniBoardArea() {
   const slotH = boardH + labelH;
 
   // Center the grid within the area
-  const usedW = cols * boardW + (cols - 1) * gap;
-  const usedH = rows * slotH + (rows - 1) * gap;
+  const actualCols = Math.min(cols, n);
+  const actualRows = Math.ceil(n / actualCols);
+  const usedW = actualCols * boardW + (actualCols - 1) * gap;
+  const usedH = actualRows * slotH + (actualRows - 1) * gap;
   const startX = areaX + Math.floor((areaW - usedW) / 2);
   const startY = areaY + Math.floor((areaH - usedH) / 2);
 
@@ -1293,12 +1298,9 @@ function drawMiniBoardArea() {
     const bp = boardPositions.get(opp.id);
     const animIdx = bp ? bp.currentIdx : i;
 
-    // Animated row from fractional index
-    const animCol = animIdx % cols;
-    const animRow = Math.floor(animIdx / cols) + (animIdx % cols - Math.floor(animIdx % cols));
     // Use target column (snaps), animated row (smooth vertical slide)
-    const targetCol = i % cols;
-    const animRowSmooth = animIdx / cols;
+    const targetCol = i % actualCols;
+    const animRowSmooth = animIdx / actualCols;
 
     const bx = startX + targetCol * (boardW + gap);
     const by = startY + animRowSmooth * (slotH + gap);
