@@ -35,7 +35,7 @@
 // ── Constants ─────────────────────────────────────────────────────────────────
 const COLS        = 5;
 const ROWS        = 10;
-const DANGER_ROWS = 2;
+const DANGER_ROWS = 1;
 const FLASH_F     = 50;
 const PUSH_FLASH_F = 45;
 const BASE_PTS    = 100;
@@ -439,15 +439,22 @@ function decodeGrid(s) {
 // ── Cursor & Swap ─────────────────────────────────────────────────────────────
 function move(dr, dc) {
   const nr = S.curR + dr, nc = S.curC + dc;
-  const moved = (nr >= 0 && nr <= ROWS - 2 && nr !== S.curR) || (nc >= 0 && nc <= COLS - 1 && nc !== S.curC);
-  if (nr >= 0 && nr <= ROWS - 2) S.curR = nr;
+  const moved = (nr >= 0 && nr <= ROWS - 1 && nr !== S.curR) || (nc >= 0 && nc <= COLS - 1 && nc !== S.curC);
+  if (nr >= 0 && nr <= ROWS - 1) S.curR = nr;
   if (nc >= 0 && nc <= COLS - 1) S.curC = nc;
   if (moved) sfx.play('move');
 }
 function swap() {
   const r = S.curR, c = S.curC;
-  if (S.flashCells.has(`${r},${c}`) || S.flashCells.has(`${r + 1},${c}`)) return;
-  [S.grid[r][c], S.grid[r + 1][c]] = [S.grid[r + 1][c], S.grid[r][c]];
+  if (S.flashCells.has(`${r},${c}`)) return;
+  if (r === ROWS - 1) {
+    // Swap last grid row with incoming row
+    if (S.flashCells.has(`${r},${c}`)) return;
+    [S.grid[r][c], S.nextRow[c]] = [S.nextRow[c], S.grid[r][c]];
+  } else {
+    if (S.flashCells.has(`${r + 1},${c}`)) return;
+    [S.grid[r][c], S.grid[r + 1][c]] = [S.grid[r + 1][c], S.grid[r][c]];
+  }
   checkClears();
 }
 
