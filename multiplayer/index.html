@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gunpey Multiplayer</title>
+  <title>Gunpey</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
@@ -99,8 +99,10 @@ function computeLayout() {
   canvas.width = vw;
   canvas.height = vh;
 
-  if (mode === 'playing' || mode === 'spectating') {
+  if ((mode === 'playing' || mode === 'spectating') && !soloPlay) {
     computeLayoutMultiplayer(vw, vh);
+  } else if (mode === 'solo' || mode === 'soloGameover') {
+    computeLayoutSingle(vw, vh);
   } else {
     computeLayoutSingle(vw, vh);
   }
@@ -165,6 +167,7 @@ loadBg();
 //                              ↓
 //                         spectating
 let mode = 'menu';
+let soloPlay = false;
 let myPlayerId = null;
 let myName = localStorage.getItem('gpName') || '';
 let roomCode = '';
@@ -366,7 +369,9 @@ function updateScroll() {
 
 function triggerDeath() {
   S.phase = 'gameover';
-  if (ws && ws.readyState === 1) {
+  if (soloPlay) {
+    mode = 'soloGameover';
+  } else if (ws && ws.readyState === 1) {
     wsSend({ type: 'dead' });
     mode = 'spectating';
   }
@@ -574,6 +579,46 @@ window.addEventListener('keydown', e => {
 
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
 
+  // Escape → back to menu from any game mode
+  if (e.key === 'Escape') {
+    if (mode === 'solo' || mode === 'soloGameover' || mode === 'spectating' || mode === 'results') {
+      if (ws) ws.close();
+      soloPlay = false;
+      mode = 'menu';
+      computeLayout();
+      return;
+    }
+  }
+
+  // Solo mode controls
+  if (mode === 'solo') {
+    if (S.phase === 'playing') {
+      if (e.key === 'ArrowUp')    move(-1,  0);
+      if (e.key === 'ArrowDown')  move(+1,  0);
+      if (e.key === 'ArrowLeft')  move( 0, -1);
+      if (e.key === 'ArrowRight') move( 0, +1);
+      if (e.key === ' ' || e.key === 'z' || e.key === 'Z') swap();
+    }
+    if (e.key === 'p' || e.key === 'P') {
+      if (S.phase === 'playing') S.phase = 'paused';
+      else if (S.phase === 'paused') S.phase = 'playing';
+      return;
+    }
+    if (e.key === 'r' || e.key === 'R') {
+      initState(); loadBg(); S.phase = 'playing';
+      return;
+    }
+  }
+
+  // Solo game over
+  if (mode === 'soloGameover') {
+    if (e.key === 'r' || e.key === 'R') {
+      initState(); loadBg(); mode = 'solo'; S.phase = 'playing';
+      return;
+    }
+  }
+
+  // Multiplayer playing controls
   if (mode === 'playing' && S.phase === 'playing') {
     if (e.key === 'ArrowUp')    move(-1,  0);
     if (e.key === 'ArrowDown')  move(+1,  0);
@@ -581,9 +626,11 @@ window.addEventListener('keydown', e => {
     if (e.key === 'ArrowRight') move( 0, +1);
     if (e.key === ' ' || e.key === 'z' || e.key === 'Z') swap();
   }
+
   if (e.key === 'm' || e.key === 'M') music.toggle();
-  if (mode === 'results' && (e.key === ' ' || e.key === 'Enter' || e.key === 'Escape')) {
+  if (mode === 'results' && (e.key === ' ' || e.key === 'Enter')) {
     mode = 'menu';
+    if (ws) ws.close();
     computeLayout();
     hideInputs();
   }
@@ -606,14 +653,18 @@ function hitTest(pos, buttons) {
   return null;
 }
 
+let soloButtons = [];
+
 function handleClick(e) {
   const pos = getClickPos(e);
   let buttons;
   switch (mode) {
-    case 'menu':    buttons = menuButtons; break;
-    case 'browser': buttons = browserButtons; break;
-    case 'lobby':   buttons = lobbyButtons; break;
-    case 'results': buttons = resultButtons; break;
+    case 'menu':        buttons = menuButtons; break;
+    case 'browser':     buttons = browserButtons; break;
+    case 'lobby':       buttons = lobbyButtons; break;
+    case 'results':     buttons = resultButtons; break;
+    case 'solo':        buttons = soloButtons; break;
+    case 'soloGameover': buttons = soloButtons; break;
     default: return;
   }
   const hit = hitTest(pos, buttons);
@@ -992,9 +1043,9 @@ function drawMenuScreen() {
   ctx.fillText('GUNPEY', canW / 2, canH * 0.22);
   ctx.restore();
 
-  ctx.fillStyle = 'rgba(255,255,255,0.4)';
-  ctx.font = `${Math.min(18, canW * 0.025)}px Arial`;
-  ctx.fillText('Multiplayer', canW / 2, canH * 0.28);
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.font = `${Math.min(16, canW * 0.022)}px Arial`;
+  ctx.fillText('Connect lines left to right to clear them', canW / 2, canH * 0.28);
 
   // Name input position
   const inputW = Math.min(250, canW * 0.35);
@@ -1015,12 +1066,21 @@ function drawMenuScreen() {
   // Buttons
   menuButtons = [];
   const btnW = Math.min(260, canW * 0.35);
-  const btnH = 48;
+  const btnH = 44;
   const btnX = canW / 2 - btnW / 2;
-  const btnStartY = canH * 0.48;
-  const btnGap = 16;
+  const btnStartY = canH * 0.45;
+  const btnGap = 12;
 
   const btns = [
+    { label: 'Solo Play', action: () => {
+      hideInputs();
+      soloPlay = true;
+      initState();
+      loadBg();
+      mode = 'solo';
+      music.start();
+      computeLayout();
+    }},
     { label: 'Create Room', action: () => {
       myName = nameInput.value.trim() || 'Player';
       localStorage.setItem('gpName', myName);
@@ -1048,7 +1108,7 @@ function drawMenuScreen() {
       if (!ws || ws.readyState !== 1) connectWS();
       // Show code input
       const codeInputX = canW / 2 - 80;
-      const codeInputY = btnStartY + (btnH + btnGap) * 2 + 16;
+      const codeInputY = btnStartY + (btnH + btnGap) * 3 + btnH + 8;
       showInput(codeInput, codeInputX, codeInputY, 160);
     }},
   ];
@@ -1315,6 +1375,158 @@ function drawResultsScreen() {
   });
 }
 
+// ── Solo HUD ──────────────────────────────────────────────────────────────────
+function drawSoloHUD() {
+  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh, hudH, ftrH, canW, canH, cell } = L;
+  const accent = S.accent || '#7b7bff';
+
+  // Top bar
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(0, 0, canW, oy - 4);
+
+  ctx.save();
+  ctx.strokeStyle = rgba(accent, 0.5);
+  ctx.lineWidth = 1;
+  ctx.shadowColor = accent;
+  ctx.shadowBlur = 8;
+  ctx.beginPath(); ctx.moveTo(0, oy - 4); ctx.lineTo(canW, oy - 4); ctx.stroke();
+  ctx.restore();
+
+  const labelSz = Math.max(10, hudH * 0.28) | 0;
+  const valueSz = Math.max(15, hudH * 0.48) | 0;
+  const midY = oy * 0.52;
+
+  const stats = [
+    { label: 'SCORE', val: S.score.toLocaleString(), hi: false },
+    { label: 'BEST',  val: S.hi.toLocaleString(),    hi: false },
+    { label: 'LEVEL', val: String(S.level),           hi: true  },
+    { label: 'LINES', val: String(S.lines),           hi: false },
+  ];
+  const padX = Math.max(24, canW * 0.06);
+  const step = (canW - padX * 2) / stats.length;
+  stats.forEach((st, i) => {
+    const x = padX + step * i + step / 2;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.font = `bold ${labelSz}px Arial`;
+    ctx.fillText(st.label, x, midY - valueSz * 0.1);
+    if (st.hi) {
+      ctx.save();
+      ctx.fillStyle = accent;
+      ctx.shadowColor = accent;
+      ctx.shadowBlur = 10;
+      ctx.font = `bold ${valueSz}px Arial`;
+      ctx.fillText(st.val, x, midY + valueSz * 0.9);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${valueSz}px Arial`;
+      ctx.fillText(st.val, x, midY + valueSz * 0.9);
+    }
+  });
+
+  // Footer
+  const ftrTop = oy + gh + cell + 4;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(0, ftrTop, canW, canH - ftrTop);
+  ctx.save();
+  ctx.strokeStyle = rgba(accent, 0.35);
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, ftrTop); ctx.lineTo(canW, ftrTop); ctx.stroke();
+  ctx.restore();
+
+  const ftr = Math.max(10, ftrH * 0.42) | 0;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = `${ftr}px Arial`;
+  ctx.fillText('←→↑↓  move    Z / SPC  swap    P  pause    M  mute    R  restart    ESC  menu', canW / 2, ftrTop + ftrH * 0.45);
+
+  // Track name
+  const trackName = music.currentName;
+  if (trackName) {
+    const noteSz = Math.max(9, ftrH * 0.36) | 0;
+    const pulse = music.paused ? 0.25 : (0.45 + 0.2 * Math.sin(S.frame * 0.06));
+    ctx.textAlign = 'right';
+    ctx.fillStyle = rgba(accent, pulse);
+    ctx.font = `${noteSz}px Arial`;
+    ctx.fillText(`♪ ${trackName}`, ox + gw, ftrTop + ftrH * 0.82);
+  }
+
+  // Combo message
+  if (S.comboTimer > 0) {
+    const alpha = Math.min(1, S.comboTimer / 30);
+    const rise = (120 - S.comboTimer) * 0.4;
+    const fCombo = Math.max(18, Math.min(cell * 0.65, 40)) | 0;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 20;
+    ctx.fillStyle = accent;
+    ctx.font = `bold ${fCombo}px Arial`;
+    ctx.fillText(S.comboMsg, ox + gw / 2, oy + gh / 2 - rise);
+    ctx.restore();
+  }
+}
+
+// ── Solo overlay (pause / game over) ──────────────────────────────────────────
+function drawSoloOverlay(title, titleClr, lines) {
+  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh, canW, canH, cell: cs } = L;
+  soloButtons = [];
+
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect(0, 0, canW, canH);
+
+  ctx.fillStyle = 'rgba(4,4,20,0.92)';
+  const pad = cs * 0.5;
+  ctx.fillRect(ox - pad, oy - pad, gw + pad * 2, gh + pad * 2);
+
+  ctx.save();
+  ctx.strokeStyle = rgba(S.accent, 0.7);
+  ctx.lineWidth = 1.5;
+  ctx.shadowColor = S.accent;
+  ctx.shadowBlur = 16;
+  ctx.strokeRect(ox - pad, oy - pad, gw + pad * 2, gh + pad * 2);
+  ctx.restore();
+
+  const cx = ox + gw / 2;
+  const fTit = Math.max(24, Math.min(cs * 0.72, 52));
+  const fBod = Math.max(13, Math.min(cs * 0.34, 20));
+  const baseY = oy + gh * 0.3;
+
+  ctx.textAlign = 'center';
+  ctx.shadowColor = titleClr;
+  ctx.shadowBlur = fTit * 0.55;
+  ctx.fillStyle = titleClr;
+  ctx.font = `bold ${fTit}px Arial`;
+  ctx.fillText(title, cx, baseY);
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = 'rgba(210,210,230,0.9)';
+  ctx.font = `${fBod}px Arial`;
+  lines.forEach((line, i) => {
+    ctx.fillText(line, cx, baseY + fTit * 0.9 + i * (fBod + 7));
+  });
+
+  // Menu button at bottom of overlay
+  const btnW = Math.min(180, gw * 0.7);
+  const btnH = 38;
+  const btnX = cx - btnW / 2;
+  const btnY = oy + gh - pad - btnH - 10;
+  ctx.fillStyle = 'rgba(60,60,120,0.7)';
+  ctx.fillRect(btnX, btnY, btnW, btnH);
+  ctx.strokeStyle = 'rgba(123,123,255,0.5)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(btnX, btnY, btnW, btnH);
+  ctx.fillStyle = '#ddd';
+  ctx.font = `bold 14px Arial`;
+  ctx.fillText('Back to Menu', cx, btnY + btnH / 2 + 5);
+  soloButtons.push({
+    x: btnX, y: btnY, w: btnW, h: btnH,
+    action: () => { soloPlay = false; mode = 'menu'; computeLayout(); },
+  });
+}
+
 // ── Error message ─────────────────────────────────────────────────────────────
 function drawError() {
   if (errorTimer <= 0) return;
@@ -1335,6 +1547,12 @@ function drawError() {
 
 // ── Main Render ───────────────────────────────────────────────────────────────
 function render() {
+  // Hide HTML inputs whenever we're not on the menu screen
+  if (mode !== 'menu') {
+    nameInput.style.display = 'none';
+    codeInput.style.display = 'none';
+  }
+
   switch (mode) {
     case 'menu':
       drawMenuScreen();
@@ -1347,6 +1565,47 @@ function render() {
     case 'lobby':
       drawLobbyScreen();
       break;
+
+    case 'solo':
+    case 'soloGameover': {
+      // Background
+      if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
+        ctx.drawImage(bgImg, 0, 0, L.canW, L.canH);
+        ctx.fillStyle = 'rgba(0,0,8,0.58)';
+        ctx.fillRect(0, 0, L.canW, L.canH);
+      } else {
+        ctx.fillStyle = '#060612';
+        ctx.fillRect(0, 0, L.canW, L.canH);
+      }
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(L.gridOffX, L.gridOffY, L.gridW, L.gridH + L.cell + 2);
+      ctx.clip();
+      drawGrid();
+      ctx.restore();
+
+      drawFrame();
+      drawSoloHUD();
+
+      if (S.phase === 'paused') {
+        drawSoloOverlay('PAUSED', '#f0e040', [
+          'Press  P  to resume',
+          'Press  R  to restart',
+        ]);
+      }
+      if (mode === 'soloGameover') {
+        drawSoloOverlay('GAME OVER', '#ff5555', [
+          `Score  ${S.score.toLocaleString()}`,
+          `Best   ${S.hi.toLocaleString()}`,
+          `Lines  ${S.lines}`,
+          `Level  ${S.level}`,
+          '',
+          'Press  R  to restart',
+        ]);
+      }
+      break;
+    }
 
     case 'playing':
     case 'spectating': {
@@ -1415,11 +1674,11 @@ function broadcastState() {
 // ── Game loop ─────────────────────────────────────────────────────────────────
 function loop() {
   S.frame = (S.frame || 0) + 1;
-  if (mode === 'playing' && S.phase === 'playing') {
+  if ((mode === 'playing' || mode === 'solo') && S.phase === 'playing') {
     updateScroll();
     updateFlash();
     if (S.comboTimer > 0) S.comboTimer--;
-    broadcastState();
+    if (mode === 'playing') broadcastState();
   }
   if (mode === 'spectating') {
     if (S.comboTimer > 0) S.comboTimer--;
