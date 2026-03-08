@@ -209,45 +209,138 @@ function canConnect(rPort, rowR, lPort, rowR2) {
   return false;
 }
 
-// DFS: find all complete left→right paths (one tile per column, any row).
-// A path is an array of 5 {r, c} objects.
+// ── Vertical Connections ─────────────────────────────────────────────────────
+// '/' and '\' tiles share corners at cell borders, so vertically adjacent
+// tiles of opposite type connect:
+//   / at row r ↔ \ at row r±1   (they share a corner)
+//   \ at row r ↔ / at row r±1
+// When a path enters a tile, the entry direction determines which exits
+// are available.  '/' entered from the left/bottom → can exit right & up;
+// '\' entered from the left/top → can exit right & down; etc.
+
+// DFS: find all complete left→right paths, allowing vertical traversal
+// of '/' and '\' chains within a column.
 function findCompletePaths() {
   const paths = [];
-  function dfs(r, c, path) {
+
+  // entry: 'left' | 'top' | 'bottom' — how we entered this tile
+  function dfs(r, c, entry, path, colVisited) {
+    const tile = S.grid[r][c];
+    const key = `${r},${c}`;
+    if (colVisited.has(key)) return;
+
     path.push({ r, c });
-    if (c === COLS - 1) { paths.push([...path]); path.pop(); return; }
-    const rPort = PORT[S.grid[r][c]].r;
-    const nc = c + 1;
-    for (let nr = 0; nr < ROWS; nr++) {
-      const t = S.grid[nr][nc];
-      if (t && canConnect(rPort, r, PORT[t].l, nr)) dfs(nr, nc, path);
+    colVisited.add(key);
+
+    // Determine available exits based on tile shape and entry direction.
+    // '/': BL↔TR.  '\': TL↔BR.  '^': BL→BR.  'v': TL→TR.
+    let canRight = false, rightPort = null;
+    let canUp = false, canDown = false;
+
+    if (tile === '/') {
+      if (entry === 'left' || entry === 'bottom') {
+        canRight = true; rightPort = 'T'; canUp = true;
+      } else { // entered from top → exit at BL → can only go down
+        canDown = true;
+      }
+    } else if (tile === '\\') {
+      if (entry === 'left' || entry === 'top') {
+        canRight = true; rightPort = 'B'; canDown = true;
+      } else { // entered from bottom → exit at TL → can only go up
+        canUp = true;
+      }
+    } else { // '^' or 'v' — no vertical connections, only left entry
+      canRight = true;
+      rightPort = PORT[tile].r;
     }
+
+    // Exit right to next column
+    if (canRight) {
+      if (c === COLS - 1) {
+        paths.push([...path]);
+      } else {
+        const nc = c + 1;
+        for (let nr = 0; nr < ROWS; nr++) {
+          const t = S.grid[nr][nc];
+          if (t && canConnect(rightPort, r, PORT[t].l, nr))
+            dfs(nr, nc, 'left', path, new Set());
+        }
+      }
+    }
+
+    // Vertical connections within the column (only between / and \)
+    if (canUp && r > 0) {
+      const above = S.grid[r - 1][c];
+      if (above && ((tile === '/' && above === '\\') || (tile === '\\' && above === '/')))
+        dfs(r - 1, c, 'bottom', path, colVisited);
+    }
+    if (canDown && r < ROWS - 1) {
+      const below = S.grid[r + 1][c];
+      if (below && ((tile === '\\' && below === '/') || (tile === '/' && below === '\\')))
+        dfs(r + 1, c, 'top', path, colVisited);
+    }
+
     path.pop();
+    colVisited.delete(key);
   }
+
   for (let r = 0; r < ROWS; r++) {
-    if (S.grid[r][0]) dfs(r, 0, []);
+    if (S.grid[r][0]) dfs(r, 0, 'left', [], new Set());
   }
   return paths;
 }
 
-// BFS: all cells reachable from any col-0 tile going left→right.
-// Used for the "chain glow" visual indicator.
+// All cells reachable from any col-0 tile going left→right (with vertical
+// traversal).  Used for the "chain glow" visual indicator.
 function getChainedCells() {
   const visited = new Set();
-  function dfs(r, c) {
+
+  function dfs(r, c, entry, colVisited) {
+    const tile = S.grid[r][c];
     const key = `${r},${c}`;
-    if (visited.has(key)) return;
+    if (colVisited.has(key)) return;
     visited.add(key);
-    if (c >= COLS - 1) return;
-    const rPort = PORT[S.grid[r][c]].r;
-    const nc = c + 1;
-    for (let nr = 0; nr < ROWS; nr++) {
-      const t = S.grid[nr][nc];
-      if (t && canConnect(rPort, r, PORT[t].l, nr)) dfs(nr, nc);
+    colVisited.add(key);
+
+    let canRight = false, rightPort = null;
+    let canUp = false, canDown = false;
+
+    if (tile === '/') {
+      if (entry === 'left' || entry === 'bottom') {
+        canRight = true; rightPort = 'T'; canUp = true;
+      } else { canDown = true; }
+    } else if (tile === '\\') {
+      if (entry === 'left' || entry === 'top') {
+        canRight = true; rightPort = 'B'; canDown = true;
+      } else { canUp = true; }
+    } else {
+      canRight = true;
+      rightPort = PORT[tile].r;
+    }
+
+    if (canRight && c < COLS - 1) {
+      const nc = c + 1;
+      for (let nr = 0; nr < ROWS; nr++) {
+        const t = S.grid[nr][nc];
+        if (t && canConnect(rightPort, r, PORT[t].l, nr))
+          dfs(nr, nc, 'left', new Set());
+      }
+    }
+
+    if (canUp && r > 0) {
+      const above = S.grid[r - 1][c];
+      if (above && ((tile === '/' && above === '\\') || (tile === '\\' && above === '/')))
+        dfs(r - 1, c, 'bottom', colVisited);
+    }
+    if (canDown && r < ROWS - 1) {
+      const below = S.grid[r + 1][c];
+      if (below && ((tile === '\\' && below === '/') || (tile === '/' && below === '\\')))
+        dfs(r + 1, c, 'top', colVisited);
     }
   }
+
   for (let r = 0; r < ROWS; r++) {
-    if (S.grid[r][0]) dfs(r, 0);
+    if (S.grid[r][0]) dfs(r, 0, 'left', new Set());
   }
   return visited;
 }
@@ -409,8 +502,8 @@ function drawTile(tile, px, py, glowing, flashPhase) {
   switch (tile) {
     case '/':  ctx.moveTo(BL_x, BL_y); ctx.lineTo(TR_x, TR_y); break;
     case '\\': ctx.moveTo(TL_x, TL_y); ctx.lineTo(BR_x, BR_y); break;
-    case '^':  ctx.moveTo(BL_x, BL_y); ctx.lineTo(cx, TL_y); ctx.lineTo(BR_x, BR_y); break;
-    case 'v':  ctx.moveTo(TL_x, TL_y); ctx.lineTo(cx, BL_y); ctx.lineTo(TR_x, TR_y); break;
+    case '^':  ctx.moveTo(BL_x, BL_y); ctx.lineTo(cx, py + cs * 0.5); ctx.lineTo(BR_x, BR_y); break;
+    case 'v':  ctx.moveTo(TL_x, TL_y); ctx.lineTo(cx, py + cs * 0.5); ctx.lineTo(TR_x, TR_y); break;
   }
   ctx.stroke();
   ctx.restore();

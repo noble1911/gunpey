@@ -264,8 +264,8 @@ function drawMenuParticles(canW, canH) {
     switch (p.tile) {
       case '/':  ctx.moveTo(x, y + s); ctx.lineTo(x + s, y); break;
       case '\\': ctx.moveTo(x, y); ctx.lineTo(x + s, y + s); break;
-      case '^':  ctx.moveTo(x, y + s); ctx.lineTo(x + s/2, y); ctx.lineTo(x + s, y + s); break;
-      case 'v':  ctx.moveTo(x, y); ctx.lineTo(x + s/2, y + s); ctx.lineTo(x + s, y); break;
+      case '^':  ctx.moveTo(x, y + s); ctx.lineTo(x + s/2, y + s*0.5); ctx.lineTo(x + s, y + s); break;
+      case 'v':  ctx.moveTo(x, y); ctx.lineTo(x + s/2, y + s*0.5); ctx.lineTo(x + s, y); break;
     }
     ctx.stroke();
     ctx.restore();
@@ -441,41 +441,118 @@ function canConnect(rPort, rowR, lPort, rowR2) {
   return false;
 }
 
+// Vertical connections: '/' and '\' share corners at cell borders, so
+// vertically adjacent tiles of opposite type connect within the same column.
 function findCompletePaths() {
   const paths = [];
-  function dfs(r, c, path) {
+
+  function dfs(r, c, entry, path, colVisited) {
+    const tile = S.grid[r][c];
+    const key = `${r},${c}`;
+    if (colVisited.has(key)) return;
+
     path.push({ r, c });
-    if (c === COLS - 1) { paths.push([...path]); path.pop(); return; }
-    const rPort = PORT[S.grid[r][c]].r;
-    const nc = c + 1;
-    for (let nr = 0; nr < ROWS; nr++) {
-      const t = S.grid[nr][nc];
-      if (t && canConnect(rPort, r, PORT[t].l, nr)) dfs(nr, nc, path);
+    colVisited.add(key);
+
+    let canRight = false, rightPort = null;
+    let canUp = false, canDown = false;
+
+    if (tile === '/') {
+      if (entry === 'left' || entry === 'bottom') {
+        canRight = true; rightPort = 'T'; canUp = true;
+      } else { canDown = true; }
+    } else if (tile === '\\') {
+      if (entry === 'left' || entry === 'top') {
+        canRight = true; rightPort = 'B'; canDown = true;
+      } else { canUp = true; }
+    } else {
+      canRight = true;
+      rightPort = PORT[tile].r;
     }
+
+    if (canRight) {
+      if (c === COLS - 1) {
+        paths.push([...path]);
+      } else {
+        const nc = c + 1;
+        for (let nr = 0; nr < ROWS; nr++) {
+          const t = S.grid[nr][nc];
+          if (t && canConnect(rightPort, r, PORT[t].l, nr))
+            dfs(nr, nc, 'left', path, new Set());
+        }
+      }
+    }
+
+    if (canUp && r > 0) {
+      const above = S.grid[r - 1][c];
+      if (above && ((tile === '/' && above === '\\') || (tile === '\\' && above === '/')))
+        dfs(r - 1, c, 'bottom', path, colVisited);
+    }
+    if (canDown && r < ROWS - 1) {
+      const below = S.grid[r + 1][c];
+      if (below && ((tile === '\\' && below === '/') || (tile === '/' && below === '\\')))
+        dfs(r + 1, c, 'top', path, colVisited);
+    }
+
     path.pop();
+    colVisited.delete(key);
   }
+
   for (let r = 0; r < ROWS; r++) {
-    if (S.grid[r][0]) dfs(r, 0, []);
+    if (S.grid[r][0]) dfs(r, 0, 'left', [], new Set());
   }
   return paths;
 }
 
 function getChainedCells() {
   const visited = new Set();
-  function dfs(r, c) {
+
+  function dfs(r, c, entry, colVisited) {
+    const tile = S.grid[r][c];
     const key = `${r},${c}`;
-    if (visited.has(key)) return;
+    if (colVisited.has(key)) return;
     visited.add(key);
-    if (c >= COLS - 1) return;
-    const rPort = PORT[S.grid[r][c]].r;
-    const nc = c + 1;
-    for (let nr = 0; nr < ROWS; nr++) {
-      const t = S.grid[nr][nc];
-      if (t && canConnect(rPort, r, PORT[t].l, nr)) dfs(nr, nc);
+    colVisited.add(key);
+
+    let canRight = false, rightPort = null;
+    let canUp = false, canDown = false;
+
+    if (tile === '/') {
+      if (entry === 'left' || entry === 'bottom') {
+        canRight = true; rightPort = 'T'; canUp = true;
+      } else { canDown = true; }
+    } else if (tile === '\\') {
+      if (entry === 'left' || entry === 'top') {
+        canRight = true; rightPort = 'B'; canDown = true;
+      } else { canUp = true; }
+    } else {
+      canRight = true;
+      rightPort = PORT[tile].r;
+    }
+
+    if (canRight && c < COLS - 1) {
+      const nc = c + 1;
+      for (let nr = 0; nr < ROWS; nr++) {
+        const t = S.grid[nr][nc];
+        if (t && canConnect(rightPort, r, PORT[t].l, nr))
+          dfs(nr, nc, 'left', new Set());
+      }
+    }
+
+    if (canUp && r > 0) {
+      const above = S.grid[r - 1][c];
+      if (above && ((tile === '/' && above === '\\') || (tile === '\\' && above === '/')))
+        dfs(r - 1, c, 'bottom', colVisited);
+    }
+    if (canDown && r < ROWS - 1) {
+      const below = S.grid[r + 1][c];
+      if (below && ((tile === '\\' && below === '/') || (tile === '/' && below === '\\')))
+        dfs(r + 1, c, 'top', colVisited);
     }
   }
+
   for (let r = 0; r < ROWS; r++) {
-    if (S.grid[r][0]) dfs(r, 0);
+    if (S.grid[r][0]) dfs(r, 0, 'left', new Set());
   }
   return visited;
 }
@@ -1024,8 +1101,8 @@ function drawTile(tile, px, py, glowing, flashPhase) {
   switch (tile) {
     case '/':  ctx.moveTo(BL_x, BL_y); ctx.lineTo(TR_x, TR_y); break;
     case '\\': ctx.moveTo(TL_x, TL_y); ctx.lineTo(BR_x, BR_y); break;
-    case '^':  ctx.moveTo(BL_x, BL_y); ctx.lineTo(cx, TL_y); ctx.lineTo(BR_x, BR_y); break;
-    case 'v':  ctx.moveTo(TL_x, TL_y); ctx.lineTo(cx, BL_y); ctx.lineTo(TR_x, TR_y); break;
+    case '^':  ctx.moveTo(BL_x, BL_y); ctx.lineTo(cx, py + cs * 0.5); ctx.lineTo(BR_x, BR_y); break;
+    case 'v':  ctx.moveTo(TL_x, TL_y); ctx.lineTo(cx, py + cs * 0.5); ctx.lineTo(TR_x, TR_y); break;
   }
   ctx.stroke();
   ctx.restore();
@@ -1189,12 +1266,12 @@ function drawMiniTile(tile, px, py, cw, ch) {
       break;
     case '^':
       ctx.moveTo(px, py + ch);
-      ctx.lineTo(px + cw / 2, py);
+      ctx.lineTo(px + cw / 2, py + ch * 0.5);
       ctx.lineTo(px + cw, py + ch);
       break;
     case 'v':
       ctx.moveTo(px, py);
-      ctx.lineTo(px + cw / 2, py + ch);
+      ctx.lineTo(px + cw / 2, py + ch * 0.5);
       ctx.lineTo(px + cw, py);
       break;
   }
