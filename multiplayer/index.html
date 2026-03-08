@@ -295,6 +295,7 @@ let winnerBanner = null; // {winner, placement, timer}
 let menuButtons = [];
 let browserButtons = [];
 let lobbyButtons = [];
+let codeCopiedAt = 0;   // timestamp for "Copied!" feedback
 let resultButtons = [];
 
 // ── Game State ────────────────────────────────────────────────────────────────
@@ -1780,13 +1781,42 @@ function drawLobbyScreen() {
   ctx.font = '14px Arial';
   ctx.fillText('Room Code:', canW / 2, canH * 0.1);
 
+  const codeFontSize = Math.min(72, canW * 0.1);
   ctx.save();
   ctx.fillStyle = '#7b7bff';
   ctx.shadowColor = '#7b7bff';
   ctx.shadowBlur = 20;
-  ctx.font = `bold ${Math.min(72, canW * 0.1)}px Arial`;
+  ctx.font = `bold ${codeFontSize}px Arial`;
   ctx.fillText(roomCode, canW / 2, canH * 0.2);
   ctx.restore();
+
+  // Copy button next to room code
+  ctx.font = `bold ${codeFontSize}px Arial`;
+  const codeHalfW = ctx.measureText(roomCode).width / 2;
+  const copyBtnW = 60, copyBtnH = 28;
+  const copyBtnX = canW / 2 + codeHalfW + 12;
+  const copyBtnY = canH * 0.2 - codeFontSize * 0.45;
+  const justCopied = Date.now() - codeCopiedAt < 1500;
+
+  ctx.fillStyle = justCopied ? 'rgba(60,160,60,0.7)' : 'rgba(80,80,120,0.7)';
+  ctx.beginPath();
+  ctx.roundRect(copyBtnX, copyBtnY, copyBtnW, copyBtnH, 6);
+  ctx.fill();
+  ctx.strokeStyle = justCopied ? 'rgba(100,255,100,0.5)' : 'rgba(123,123,255,0.4)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 12px Arial';
+  ctx.fillText(justCopied ? 'Copied!' : 'Copy', copyBtnX + copyBtnW / 2, copyBtnY + copyBtnH / 2 + 4);
+
+  lobbyButtons.push({
+    x: copyBtnX, y: copyBtnY, w: copyBtnW, h: copyBtnH,
+    action: () => {
+      navigator.clipboard.writeText(roomCode).catch(() => {});
+      codeCopiedAt = Date.now();
+    },
+  });
 
   // Player list
   ctx.fillStyle = '#fff';
