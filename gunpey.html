@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Gunpey</title>
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
@@ -586,7 +587,6 @@ function drawGrid() {
     const py = tileY(ROWS);
     const warning = S.flashTimer === 0 && S.pushCountdown <= PUSH_FLASH_F;
     const fp      = warning ? 1 - S.pushCountdown / PUSH_FLASH_F : undefined;
-    // Draw the incoming row's cell backgrounds
     for (let c = 0; c < COLS; c++) {
       const px = tileX(c);
       ctx.fillStyle = 'rgba(8,8,24,0.82)';
@@ -594,6 +594,12 @@ function drawGrid() {
       ctx.strokeStyle = 'rgba(50,50,100,0.35)';
       ctx.lineWidth = 1;
       ctx.strokeRect(px + 0.5, py + 0.5, cs - 1, cs - 1);
+      // Flash empty squares too
+      if (fp !== undefined && !S.nextRow[c]) {
+        const a = 0.4 + 0.6 * Math.abs(Math.sin(fp * Math.PI * 4));
+        ctx.fillStyle = `rgba(255,255,255,${a * 0.25})`;
+        ctx.fillRect(px, py, cs, cs);
+      }
     }
     for (let c = 0; c < COLS; c++) {
       if (S.nextRow[c]) drawTile(S.nextRow[c], tileX(c), py, inChain.has(`0,${c}`), fp);

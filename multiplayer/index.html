@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Gunpey 99</title>
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
@@ -1184,6 +1185,11 @@ function drawGrid() {
       ctx.strokeStyle = 'rgba(50,50,100,0.35)';
       ctx.lineWidth = 1;
       ctx.strokeRect(px + 0.5, py + 0.5, cs - 1, cs - 1);
+      if (fp !== undefined && !S.nextRow[c]) {
+        const a = 0.4 + 0.6 * Math.abs(Math.sin(fp * Math.PI * 4));
+        ctx.fillStyle = `rgba(255,255,255,${a * 0.25})`;
+        ctx.fillRect(px, py, cs, cs);
+      }
     }
     for (let c = 0; c < COLS; c++) {
       if (S.nextRow[c]) drawTile(S.nextRow[c], tileX(c), py, false, fp);

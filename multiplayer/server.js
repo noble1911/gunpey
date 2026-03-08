@@ -16,6 +16,7 @@ const MIME = {
   '.png':  'image/png',
   '.jpg':  'image/jpeg',
   '.json': 'application/json',
+  '.ico':  'image/x-icon',
 };
 
 const server = http.createServer((req, res) => {
@@ -24,7 +25,7 @@ const server = http.createServer((req, res) => {
 
   // Serve music/ and sfx/ from the parent directory
   let filePath;
-  if (urlPath.startsWith('/music/') || urlPath.startsWith('/sfx/')) {
+  if (urlPath.startsWith('/music/') || urlPath.startsWith('/sfx/') || urlPath === '/favicon.ico') {
     filePath = path.join(__dirname, '..', urlPath);
   } else {
     filePath = path.join(__dirname, urlPath);
