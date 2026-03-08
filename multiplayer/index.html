@@ -94,6 +94,25 @@ const music = (() => {
   };
 })();
 
+// ── SFX ───────────────────────────────────────────────────────────────────────
+const sfx = (() => {
+  function load(name) {
+    const a = new Audio('sfx/' + name + '.wav');
+    a.preload = 'auto';
+    return a;
+  }
+  const sounds = { move: load('move'), line: load('line'), win: load('win') };
+  return {
+    play(name) {
+      const s = sounds[name];
+      if (!s) return;
+      s.volume = music.volume;
+      s.currentTime = 0;
+      s.play().catch(() => {});
+    },
+  };
+})();
+
 // ── Layout ────────────────────────────────────────────────────────────────────
 let L = {};
 
@@ -311,6 +330,7 @@ function checkClears() {
 
   S.flashCells = toFlash;
   S.flashTimer = FLASH_F;
+  sfx.play('line');
 
   // Send attack in multiplayer
   if (ws && ws.readyState === 1 && mode === 'playing') {
@@ -413,8 +433,10 @@ function decodeGrid(s) {
 // ── Cursor & Swap ─────────────────────────────────────────────────────────────
 function move(dr, dc) {
   const nr = S.curR + dr, nc = S.curC + dc;
+  const moved = (nr >= 0 && nr <= ROWS - 2 && nr !== S.curR) || (nc >= 0 && nc <= COLS - 1 && nc !== S.curC);
   if (nr >= 0 && nr <= ROWS - 2) S.curR = nr;
   if (nc >= 0 && nc <= COLS - 1) S.curC = nc;
+  if (moved) sfx.play('move');
 }
 function swap() {
   const r = S.curR, c = S.curC;
@@ -520,6 +542,7 @@ function connectWS() {
         resultData = msg;
         if (msg.winner && msg.winner.id === myPlayerId) {
           S.placement = 1;
+          sfx.play('win');
         }
         mode = 'results';
         computeLayout();

@@ -22,9 +22,9 @@ const server = http.createServer((req, res) => {
   let urlPath = decodeURIComponent(req.url.split('?')[0]);
   if (urlPath === '/') urlPath = '/index.html';
 
-  // Serve music/ from the parent directory
+  // Serve music/ and sfx/ from the parent directory
   let filePath;
-  if (urlPath.startsWith('/music/')) {
+  if (urlPath.startsWith('/music/') || urlPath.startsWith('/sfx/')) {
     filePath = path.join(__dirname, '..', urlPath);
   } else {
     filePath = path.join(__dirname, urlPath);
