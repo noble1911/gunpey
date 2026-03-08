@@ -1,0 +1,12 @@
+{
+  "name": "gunpey-multiplayer",
+  "version": "1.0.0",
+  "description": "Gunpey multiplayer server (Tetris 99-style)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.0.0"
+  }
+}

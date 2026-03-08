@@ -18,6 +18,7 @@ const COLS        = 5;
 const ROWS        = 10;
 const DANGER_ROWS = 2;
 const FLASH_F     = 50;
+const PUSH_FLASH_F = 45;   // frames the incoming row flashes before being pushed in
 const BASE_PTS    = 100;
 
 // ── Tile Definitions ──────────────────────────────────────────────────────────
@@ -104,13 +105,15 @@ function computeLayout() {
   const vw = window.innerWidth, vh = window.innerHeight;
   const hudH = Math.max(50, Math.floor(vh * 0.09));   // score strip above grid
   const ftrH = Math.max(28, Math.floor(vh * 0.05));   // controls hint below grid
-  const byH  = Math.floor((vh - hudH - ftrH - 16) / ROWS);
+  // Account for ROWS + 1 cells (grid rows + incoming row below)
+  const totalRows = ROWS + 1;
+  const byH  = Math.floor((vh - hudH - ftrH - 16) / totalRows);
   const byW  = Math.floor(vw * 0.58 / COLS);
   const cell = Math.max(36, Math.min(byH, byW, 96));
   const gridW = COLS * cell;
   const gridH = ROWS * cell;
   const gridOffX = Math.floor((vw - gridW) / 2);
-  const gridOffY = Math.floor(hudH + (vh - hudH - ftrH - gridH) / 2);
+  const gridOffY = Math.floor(hudH + (vh - hudH - ftrH - totalRows * cell) / 2);
   canvas.width  = vw;
   canvas.height = vh;
   L = { cell, gridW, gridH, gridOffX, gridOffY, hudH, ftrH, canW: vw, canH: vh };
@@ -142,8 +145,8 @@ function initState() {
   }
   S = {
     grid,
-    nextRow:   makeRow(),
-    scroll:    0,
+    nextRow:      makeRow(),
+    pushCountdown: 720,   // frames until next row push (max at score 0)
     curR:      Math.floor(ROWS / 2) - 1,
     curC:      2,
     score:     0,
@@ -272,23 +275,25 @@ function updateFlash() {
   }
 }
 
-// ── Scroll ────────────────────────────────────────────────────────────────────
-function scrollSpeed() {
-  // Linearly interpolate from 720 frames/row (≈12 s) down to 160 frames/row (≈2.7 s).
-  // Reaches full speed at 10 000 pts; never goes faster beyond that.
+// ── Push timing ───────────────────────────────────────────────────────────────
+// Returns the total frames between row pushes (wait + flash) based on score.
+// Interpolates from 720 frames (≈12 s) down to 160 frames (≈2.7 s) at 10 000 pts.
+function pushInterval() {
   const t = Math.min(S.score / 10000, 1);
-  return 1 / (720 - 560 * t);
+  return Math.round(720 - 560 * t);
 }
 
 function updateScroll() {
-  if (S.flashTimer > 0) return;   // pause scroll while clearing
-  S.scroll += scrollSpeed();
-  if (S.scroll < 1) return;
-  S.scroll -= 1;
+  if (S.flashTimer > 0) return;   // pause while a clear is animating
+  S.pushCountdown--;
+  if (S.pushCountdown > 0) return;
+
+  // ── Commit push ──
   if (S.grid[0].some(t => t !== null)) { S.phase = 'gameover'; return; }
   S.grid.shift();
   S.grid.push(S.nextRow);
   S.nextRow = makeRow();
+
   // Shift flash cell row indices after grid shift
   const shifted = new Set();
   for (const key of S.flashCells) {
@@ -297,6 +302,7 @@ function updateScroll() {
   }
   S.flashCells = shifted;
   S.curR = Math.max(0, S.curR - 1);
+  S.pushCountdown = pushInterval();
   checkClears();
 }
 
@@ -341,7 +347,7 @@ function initAndStart() {
 }
 
 // ── Drawing helpers ───────────────────────────────────────────────────────────
-function tileY(r) { return L.gridOffY + (r - S.scroll) * L.cell; }
+function tileY(r) { return L.gridOffY + r * L.cell; }
 function tileX(c) { return L.gridOffX + c * L.cell; }
 
 // hex colour → CSS rgba string with given alpha 0-1
@@ -451,13 +457,22 @@ function drawGrid() {
       drawTile(tile, tileX(c), py, chained.has(key), fp);
     }
   }
-  // Incoming row (scrolling up from below)
+  // Incoming row — sits just below the grid, flashes as a warning before being pushed in
   {
     const py = tileY(ROWS);
-    if (py < oy + L.gridH + cs) {
-      for (let c = 0; c < COLS; c++) {
-        if (S.nextRow[c]) drawTile(S.nextRow[c], tileX(c), py, inChain.has(`0,${c}`), undefined);
-      }
+    const warning = S.flashTimer === 0 && S.pushCountdown <= PUSH_FLASH_F;
+    const fp      = warning ? 1 - S.pushCountdown / PUSH_FLASH_F : undefined;
+    // Draw the incoming row's cell backgrounds
+    for (let c = 0; c < COLS; c++) {
+      const px = tileX(c);
+      ctx.fillStyle = 'rgba(8,8,24,0.82)';
+      ctx.fillRect(px, py, cs, cs);
+      ctx.strokeStyle = 'rgba(50,50,100,0.35)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(px + 0.5, py + 0.5, cs - 1, cs - 1);
+    }
+    for (let c = 0; c < COLS; c++) {
+      if (S.nextRow[c]) drawTile(S.nextRow[c], tileX(c), py, inChain.has(`0,${c}`), fp);
     }
   }
 
@@ -498,9 +513,10 @@ function drawGrid() {
 
 // ── Draw the frame border around the grid ─────────────────────────────────────
 function drawFrame() {
-  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh } = L;
+  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh, cell } = L;
   const accent = S.accent;
   const pad = 3;
+  const totalH = gh + cell;  // grid rows + incoming row
 
   // Outer glow border
   ctx.save();
@@ -508,26 +524,26 @@ function drawFrame() {
   ctx.shadowBlur  = 18;
   ctx.strokeStyle = rgba(accent, 0.9);
   ctx.lineWidth   = 1.5;
-  ctx.strokeRect(ox - pad, oy - pad, gw + pad * 2, gh + pad * 2);
+  ctx.strokeRect(ox - pad, oy - pad, gw + pad * 2, totalH + pad * 2);
   ctx.restore();
 
   // Subtle inner white outline
   ctx.strokeStyle = 'rgba(255,255,255,0.12)';
   ctx.lineWidth = 1;
-  ctx.strokeRect(ox - pad - 3, oy - pad - 3, gw + (pad + 3) * 2, gh + (pad + 3) * 2);
+  ctx.strokeRect(ox - pad - 3, oy - pad - 3, gw + (pad + 3) * 2, totalH + (pad + 3) * 2);
 
   // Corner squares
-  const csz = Math.max(8, L.cell * 0.15);
+  const csz = Math.max(8, cell * 0.15);
   ctx.save();
   ctx.fillStyle = accent;
   ctx.shadowColor = accent;
   ctx.shadowBlur  = 12;
   const fp = pad;
   [
-    [ox - fp - csz,      oy - fp - csz     ],
-    [ox + gw + fp,       oy - fp - csz     ],
-    [ox - fp - csz,      oy + gh + fp      ],
-    [ox + gw + fp,       oy + gh + fp      ],
+    [ox - fp - csz,      oy - fp - csz         ],
+    [ox + gw + fp,       oy - fp - csz         ],
+    [ox - fp - csz,      oy + totalH + fp      ],
+    [ox + gw + fp,       oy + totalH + fp      ],
   ].forEach(([x, y]) => ctx.fillRect(x, y, csz, csz));
   ctx.restore();
 }
@@ -551,56 +567,57 @@ function drawHUD() {
   ctx.beginPath(); ctx.moveTo(0, oy - 4); ctx.lineTo(canW, oy - 4); ctx.stroke();
   ctx.restore();
 
-  const labelSz = Math.max(10, hudH * 0.3)  | 0;
-  const valueSz = Math.max(16, hudH * 0.52) | 0;
+  const labelSz = Math.max(10, hudH * 0.28) | 0;
+  const valueSz = Math.max(15, hudH * 0.48) | 0;
   const midY    = oy * 0.52;
 
-  // Four stats evenly spaced across the grid width, centred above it
+  // Four stats spread across the full screen width (not just the grid)
+  // so large numbers never overlap.
   const stats = [
     { label: 'SCORE', val: S.score.toLocaleString(), hi: false },
     { label: 'BEST',  val: S.hi.toLocaleString(),    hi: false },
     { label: 'LEVEL', val: String(S.level),           hi: true  },
     { label: 'LINES', val: String(S.lines),           hi: false },
   ];
-  const step = gw / stats.length;
+  const padX = Math.max(24, canW * 0.06);
+  const step  = (canW - padX * 2) / stats.length;
   stats.forEach((st, i) => {
-    const x = ox + step * i + step / 2;
+    const x = padX + step * i + step / 2;
     ctx.textAlign = 'center';
-    // Label
     ctx.fillStyle = 'rgba(255,255,255,0.45)';
     ctx.font = `bold ${labelSz}px Arial`;
-    ctx.fillText(st.label, x, midY - valueSz * 0.15);
-    // Value
+    ctx.fillText(st.label, x, midY - valueSz * 0.1);
     if (st.hi) {
       ctx.save();
       ctx.fillStyle   = accent;
       ctx.shadowColor = accent;
       ctx.shadowBlur  = 10;
       ctx.font = `bold ${valueSz}px Arial`;
-      ctx.fillText(st.val, x, midY + valueSz * 0.85);
+      ctx.fillText(st.val, x, midY + valueSz * 0.9);
       ctx.restore();
     } else {
       ctx.fillStyle = '#ffffff';
       ctx.font = `bold ${valueSz}px Arial`;
-      ctx.fillText(st.val, x, midY + valueSz * 0.85);
+      ctx.fillText(st.val, x, midY + valueSz * 0.9);
     }
   });
 
-  // ── Controls hint below grid ────────────────────────────────────────────────
+  // ── Controls hint below grid + incoming row ─────────────────────────────────
+  const ftrTop = oy + L.gridH + L.cell + 4;   // below the incoming row
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
-  ctx.fillRect(0, oy + L.gridH + 4, canW, canH - (oy + L.gridH + 4));
+  ctx.fillRect(0, ftrTop, canW, canH - ftrTop);
 
   ctx.save();
   ctx.strokeStyle = rgba(accent, 0.35);
   ctx.lineWidth   = 1;
-  ctx.beginPath(); ctx.moveTo(0, oy + L.gridH + 4); ctx.lineTo(canW, oy + L.gridH + 4); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, ftrTop); ctx.lineTo(canW, ftrTop); ctx.stroke();
   ctx.restore();
 
   const ftr = Math.max(10, ftrH * 0.42) | 0;
   ctx.textAlign  = 'center';
   ctx.fillStyle  = 'rgba(255,255,255,0.3)';
   ctx.font       = `${ftr}px Arial`;
-  ctx.fillText('←→↑↓  move    Z / SPC  swap    P  pause    M  mute    R  restart', canW / 2, oy + L.gridH + ftrH * 0.55);
+  ctx.fillText('←→↑↓  move    Z / SPC  swap    P  pause    M  mute    R  restart', canW / 2, ftrTop + ftrH * 0.45);
 
   // Now-playing strip
   const trackName = music.currentName;
@@ -610,7 +627,7 @@ function drawHUD() {
     ctx.textAlign  = 'right';
     ctx.fillStyle  = rgba(S.accent, pulse);
     ctx.font       = `${noteSz}px Arial`;
-    ctx.fillText(`♪  ${trackName}`, ox + gw, oy + L.gridH + ftrH * 0.92);
+    ctx.fillText(`♪  ${trackName}`, ox + gw, ftrTop + ftrH * 0.82);
   }
 
   // Combo message (floats above grid, fades out)

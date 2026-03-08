@@ -1,0 +1,1437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gunpey Multiplayer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+    canvas { display: block; }
+    .hidden-input {
+      position: absolute;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: #fff;
+      font-size: 18px;
+      font-family: Arial, sans-serif;
+      text-align: center;
+      padding: 4px 8px;
+      outline: none;
+      border-radius: 4px;
+      display: none;
+    }
+    .hidden-input:focus {
+      border-color: #7b7bff;
+      box-shadow: 0 0 8px rgba(123,123,255,0.4);
+    }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<input id="nameInput" class="hidden-input" maxlength="16" placeholder="Your name">
+<input id="codeInput" class="hidden-input" maxlength="4" placeholder="CODE" style="text-transform:uppercase">
+<script>
+// ── Constants ─────────────────────────────────────────────────────────────────
+const COLS        = 5;
+const ROWS        = 10;
+const DANGER_ROWS = 2;
+const FLASH_F     = 50;
+const PUSH_FLASH_F = 45;
+const BASE_PTS    = 100;
+
+const TILE_TYPES = ['/', '\\', '^', 'v'];
+const PORT = {
+  '/':  { l: 'B', r: 'T' },
+  '\\': { l: 'T', r: 'B' },
+  '^':  { l: 'B', r: 'B' },
+  'v':  { l: 'T', r: 'T' },
+};
+const TILE_CLR = { '/': '#4fc3f7', '\\': '#ce93d8', '^': '#81c784', 'v': '#ffb74d' };
+const GLOW_CLR = { '/': '#80d8ff', '\\': '#ea80fc', '^': '#b9f6ca', 'v': '#ffe082' };
+const ACCENTS = ['#00d4ff', '#ff2d78', '#39ff14', '#ff9500', '#bf5fff', '#00ffcc', '#ff4444', '#f0e040'];
+
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+const nameInput = document.getElementById('nameInput');
+const codeInput = document.getElementById('codeInput');
+
+// ── Music ─────────────────────────────────────────────────────────────────────
+const TRACK_NAMES = ['Puzzle Run', 'Puzzle', 'Pixel Cascade', 'Arcades'];
+
+const music = (() => {
+  function trackURL(name) { return 'music/' + encodeURIComponent(name) + '.mp3'; }
+  function buildQueue() {
+    const order = TRACK_NAMES.map((_, i) => i);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    return order;
+  }
+  let queue = buildQueue(), qIdx = 0, nowIdx = -1;
+  const audio = new Audio();
+  audio.volume = 0.5;
+  function playNext() {
+    nowIdx = queue[qIdx];
+    audio.src = trackURL(TRACK_NAMES[nowIdx]);
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+    qIdx++;
+    if (qIdx >= queue.length) { queue = buildQueue(); qIdx = 0; }
+  }
+  audio.addEventListener('ended', playNext);
+  audio.addEventListener('error', () => setTimeout(playNext, 300));
+  let started = false;
+  return {
+    start()  { if (!started) { started = true; playNext(); } },
+    toggle() { audio.paused ? audio.play().catch(() => {}) : audio.pause(); },
+    get paused()      { return audio.paused; },
+    get currentName() { return nowIdx >= 0 ? TRACK_NAMES[nowIdx] : ''; },
+  };
+})();
+
+// ── Layout ────────────────────────────────────────────────────────────────────
+let L = {};
+
+function computeLayout() {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  canvas.width = vw;
+  canvas.height = vh;
+
+  if (mode === 'playing' || mode === 'spectating') {
+    computeLayoutMultiplayer(vw, vh);
+  } else {
+    computeLayoutSingle(vw, vh);
+  }
+}
+
+function computeLayoutSingle(vw, vh) {
+  const hudH = Math.max(50, Math.floor(vh * 0.09));
+  const ftrH = Math.max(28, Math.floor(vh * 0.05));
+  const totalRows = ROWS + 1;
+  const byH  = Math.floor((vh - hudH - ftrH - 16) / totalRows);
+  const byW  = Math.floor(vw * 0.58 / COLS);
+  const cell = Math.max(36, Math.min(byH, byW, 96));
+  const gridW = COLS * cell;
+  const gridH = ROWS * cell;
+  const gridOffX = Math.floor((vw - gridW) / 2);
+  const gridOffY = Math.floor(hudH + (vh - hudH - ftrH - totalRows * cell) / 2);
+  L = { cell, gridW, gridH, gridOffX, gridOffY, hudH, ftrH, canW: vw, canH: vh, miniArea: null };
+}
+
+function computeLayoutMultiplayer(vw, vh) {
+  const hudH = Math.max(44, Math.floor(vh * 0.07));
+  const ftrH = Math.max(24, Math.floor(vh * 0.04));
+  const totalRows = ROWS + 1;
+  // Player grid takes left 42%
+  const gridAreaW = Math.floor(vw * 0.42);
+  const byH = Math.floor((vh - hudH - ftrH - 16) / totalRows);
+  const byW = Math.floor((gridAreaW - 40) / COLS);
+  const cell = Math.max(28, Math.min(byH, byW, 80));
+  const gridW = COLS * cell;
+  const gridH = ROWS * cell;
+  const gridOffX = Math.floor((gridAreaW - gridW) / 2);
+  const gridOffY = Math.floor(hudH + (vh - hudH - ftrH - totalRows * cell) / 2);
+
+  // Mini-board area: right 58%
+  const miniLeft = gridAreaW;
+  const miniTop = hudH + 8;
+  const miniWidth = vw - gridAreaW - 8;
+  const miniHeight = vh - hudH - ftrH - 16;
+
+  L = {
+    cell, gridW, gridH, gridOffX, gridOffY, hudH, ftrH, canW: vw, canH: vh,
+    miniArea: { x: miniLeft, y: miniTop, w: miniWidth, h: miniHeight },
+  };
+}
+
+window.addEventListener('resize', computeLayout);
+
+// ── Background Image ──────────────────────────────────────────────────────────
+let bgImg = null;
+function loadBg() {
+  bgImg = null;
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  const seed = Math.floor(Math.random() * 10000);
+  img.src = `https://picsum.photos/seed/${seed}/${Math.ceil(canvas.width || 1280)}/${Math.ceil(canvas.height || 720)}`;
+  img.onload = () => { bgImg = img; };
+}
+loadBg();
+
+// ── Mode State Machine ───────────────────────────────────────────────────────
+// menu → browser → lobby → playing → results
+//                              ↓
+//                         spectating
+let mode = 'menu';
+let myPlayerId = null;
+let myName = localStorage.getItem('gpName') || '';
+let roomCode = '';
+let isHost = false;
+let lobbyPlayers = [];
+let roomList = [];
+let roomListTimer = 0;
+let errorMsg = '';
+let errorTimer = 0;
+let resultData = null;
+let ws = null;
+
+// Opponents map: id → {id, name, score, lines, level, grid, alive}
+const opponents = new Map();
+let aliveCount = 0;
+let totalPlayers = 0;
+
+// Menu button areas (computed each frame)
+let menuButtons = [];
+let browserButtons = [];
+let lobbyButtons = [];
+let resultButtons = [];
+
+// ── Game State ────────────────────────────────────────────────────────────────
+let S = {};
+
+function emptyRow() { return new Array(COLS).fill(null); }
+function makeRow() {
+  const row = new Array(COLS).fill(null);
+  const forced = Math.floor(Math.random() * COLS);
+  row[forced] = rndTile();
+  for (let c = 0; c < COLS; c++) {
+    if (c !== forced && Math.random() < 0.35) row[c] = rndTile();
+  }
+  return row;
+}
+function rndTile() { return TILE_TYPES[Math.floor(Math.random() * 4)]; }
+
+function initState() {
+  const grid = [];
+  for (let r = 0; r < ROWS; r++) {
+    grid.push(r >= Math.floor(ROWS * 0.65) ? makeRow() : emptyRow());
+  }
+  S = {
+    grid,
+    nextRow:       makeRow(),
+    pushCountdown: 720,
+    curR:          Math.floor(ROWS / 2) - 1,
+    curC:          2,
+    score:         0,
+    level:         1,
+    lines:         0,
+    flashCells:    new Set(),
+    flashTimer:    0,
+    comboMsg:      '',
+    comboTimer:    0,
+    frame:         0,
+    phase:         'playing',
+    hi:            parseInt(localStorage.getItem('gphi') || '0', 10),
+    accent:        ACCENTS[Math.floor(Math.random() * ACCENTS.length)],
+    garbageQueue:  [],
+    pendingGarbage: 0,
+    placement:     null,
+  };
+}
+
+// ── Connection Logic ──────────────────────────────────────────────────────────
+function canConnect(rPort, rowR, lPort, rowR2) {
+  if (rPort === 'T' && lPort === 'T') return rowR2 === rowR;
+  if (rPort === 'T' && lPort === 'B') return rowR2 === rowR - 1;
+  if (rPort === 'B' && lPort === 'B') return rowR2 === rowR;
+  if (rPort === 'B' && lPort === 'T') return rowR2 === rowR + 1;
+  return false;
+}
+
+function findCompletePaths() {
+  const paths = [];
+  function dfs(r, c, path) {
+    path.push({ r, c });
+    if (c === COLS - 1) { paths.push([...path]); path.pop(); return; }
+    const rPort = PORT[S.grid[r][c]].r;
+    const nc = c + 1;
+    for (let nr = 0; nr < ROWS; nr++) {
+      const t = S.grid[nr][nc];
+      if (t && canConnect(rPort, r, PORT[t].l, nr)) dfs(nr, nc, path);
+    }
+    path.pop();
+  }
+  for (let r = 0; r < ROWS; r++) {
+    if (S.grid[r][0]) dfs(r, 0, []);
+  }
+  return paths;
+}
+
+function getChainedCells() {
+  const visited = new Set();
+  function dfs(r, c) {
+    const key = `${r},${c}`;
+    if (visited.has(key)) return;
+    visited.add(key);
+    if (c >= COLS - 1) return;
+    const rPort = PORT[S.grid[r][c]].r;
+    const nc = c + 1;
+    for (let nr = 0; nr < ROWS; nr++) {
+      const t = S.grid[nr][nc];
+      if (t && canConnect(rPort, r, PORT[t].l, nr)) dfs(nr, nc);
+    }
+  }
+  for (let r = 0; r < ROWS; r++) {
+    if (S.grid[r][0]) dfs(r, 0);
+  }
+  return visited;
+}
+
+// ── Clear / Score ─────────────────────────────────────────────────────────────
+function checkClears() {
+  if (S.flashTimer > 0) return;
+  const paths = findCompletePaths();
+  if (!paths.length) return;
+
+  const toFlash = new Set();
+  for (const path of paths) {
+    for (const { r, c } of path) toFlash.add(`${r},${c}`);
+  }
+
+  const numPaths = paths.length;
+  const numTiles = toFlash.size;
+  S.score += BASE_PTS * numTiles * numPaths * S.level;
+  S.lines += numPaths;
+  S.level  = Math.floor(S.lines / 5) + 1;
+  if (S.score > S.hi) { S.hi = S.score; localStorage.setItem('gphi', S.hi); }
+
+  if (numPaths > 1) {
+    S.comboMsg   = `${numPaths}× COMBO!`;
+    S.comboTimer = 120;
+  }
+
+  S.flashCells = toFlash;
+  S.flashTimer = FLASH_F;
+
+  // Send attack in multiplayer
+  if (ws && ws.readyState === 1 && mode === 'playing') {
+    const attackLines = numPaths === 1 ? 1 : (2 * numPaths - 1);
+    wsSend({ type: 'attack', lines: attackLines });
+  }
+}
+
+function updateFlash() {
+  if (S.flashTimer <= 0) return;
+  S.flashTimer--;
+  if (S.flashTimer === 0) {
+    for (const key of S.flashCells) {
+      const [r, c] = key.split(',').map(Number);
+      if (r >= 0 && r < ROWS) S.grid[r][c] = null;
+    }
+    S.flashCells = new Set();
+  }
+}
+
+// ── Push timing ───────────────────────────────────────────────────────────────
+function pushInterval() {
+  const t = Math.min(S.score / 10000, 1);
+  return Math.round(720 - 560 * t);
+}
+
+function updateScroll() {
+  if (S.flashTimer > 0) return;
+
+  // Process garbage queue first (rapid push, one row per call)
+  if (S.garbageQueue.length > 0) {
+    const gRow = S.garbageQueue.shift();
+    S.pendingGarbage = S.garbageQueue.length;
+    if (S.grid[0].some(t => t !== null)) { triggerDeath(); return; }
+    S.grid.shift();
+    S.grid.push(gRow);
+    S.curR = Math.max(0, S.curR - 1);
+    checkClears();
+    return;
+  }
+
+  S.pushCountdown--;
+  if (S.pushCountdown > 0) return;
+
+  if (S.grid[0].some(t => t !== null)) { triggerDeath(); return; }
+  S.grid.shift();
+  S.grid.push(S.nextRow);
+  S.nextRow = makeRow();
+
+  const shifted = new Set();
+  for (const key of S.flashCells) {
+    const [r, c] = key.split(',').map(Number);
+    if (r > 0) shifted.add(`${r - 1},${c}`);
+  }
+  S.flashCells = shifted;
+  S.curR = Math.max(0, S.curR - 1);
+  S.pushCountdown = pushInterval();
+  checkClears();
+}
+
+function triggerDeath() {
+  S.phase = 'gameover';
+  if (ws && ws.readyState === 1) {
+    wsSend({ type: 'dead' });
+    mode = 'spectating';
+  }
+}
+
+// ── Grid encoding for network ─────────────────────────────────────────────────
+function encodeGrid() {
+  let s = '';
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      s += S.grid[r][c] || '.';
+    }
+  }
+  return s;
+}
+
+function decodeGrid(s) {
+  // Returns a flat representation: array of rows, each an array of tiles or null
+  const grid = [];
+  for (let r = 0; r < ROWS; r++) {
+    const row = [];
+    for (let c = 0; c < COLS; c++) {
+      const ch = s[r * COLS + c];
+      row.push(ch === '.' ? null : ch);
+    }
+    grid.push(row);
+  }
+  return grid;
+}
+
+// ── Cursor & Swap ─────────────────────────────────────────────────────────────
+function move(dr, dc) {
+  const nr = S.curR + dr, nc = S.curC + dc;
+  if (nr >= 0 && nr <= ROWS - 2) S.curR = nr;
+  if (nc >= 0 && nc <= COLS - 1) S.curC = nc;
+}
+function swap() {
+  const r = S.curR, c = S.curC;
+  if (S.flashCells.has(`${r},${c}`) || S.flashCells.has(`${r + 1},${c}`)) return;
+  [S.grid[r][c], S.grid[r + 1][c]] = [S.grid[r + 1][c], S.grid[r][c]];
+  checkClears();
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}`);
+
+  ws.onopen = () => {};
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    switch (msg.type) {
+      case 'created':
+        myPlayerId = msg.playerId;
+        roomCode = msg.code;
+        isHost = true;
+        mode = 'lobby';
+        computeLayout();
+        break;
+
+      case 'joined':
+        myPlayerId = msg.playerId;
+        lobbyPlayers = msg.players;
+        mode = 'lobby';
+        computeLayout();
+        break;
+
+      case 'lobby':
+        lobbyPlayers = msg.players;
+        break;
+
+      case 'roomList':
+        roomList = msg.rooms;
+        break;
+
+      case 'error':
+        errorMsg = msg.msg;
+        errorTimer = 180;
+        break;
+
+      case 'gameStart':
+        lobbyPlayers = msg.players;
+        totalPlayers = msg.players.length;
+        aliveCount = totalPlayers;
+        opponents.clear();
+        for (const p of msg.players) {
+          if (p.id !== myPlayerId) {
+            opponents.set(p.id, { ...p, score: 0, lines: 0, level: 1, grid: '', alive: true });
+          }
+        }
+        initState();
+        mode = 'playing';
+        music.start();
+        computeLayout();
+        break;
+
+      case 'playerState':
+        if (opponents.has(msg.id)) {
+          const opp = opponents.get(msg.id);
+          opp.score = msg.score;
+          opp.lines = msg.lines;
+          opp.level = msg.level;
+          opp.grid = msg.grid;
+          opp.name = msg.name;
+        }
+        break;
+
+      case 'attacked': {
+        // Parse garbage rows and queue them
+        const rows = msg.garbageRows.map(encoded => {
+          const row = [];
+          for (let i = 0; i < 5; i++) {
+            const ch = encoded[i];
+            row.push(ch === '.' ? null : ch);
+          }
+          return row;
+        });
+        S.garbageQueue.push(...rows);
+        S.pendingGarbage = S.garbageQueue.length;
+        // Show attack notification
+        S.comboMsg = `${msg.fromName} sent ${rows.length}!`;
+        S.comboTimer = 90;
+        break;
+      }
+
+      case 'playerDead':
+        if (opponents.has(msg.id)) {
+          opponents.get(msg.id).alive = false;
+        }
+        aliveCount = msg.aliveCount;
+        if (msg.id === myPlayerId) {
+          S.placement = msg.placement;
+        }
+        break;
+
+      case 'gameEnd':
+        resultData = msg;
+        if (msg.winner && msg.winner.id === myPlayerId) {
+          S.placement = 1;
+        }
+        mode = 'results';
+        computeLayout();
+        break;
+    }
+  };
+
+  ws.onclose = () => {
+    if (mode === 'playing' || mode === 'lobby') {
+      errorMsg = 'Disconnected from server';
+      errorTimer = 300;
+      mode = 'menu';
+      computeLayout();
+    }
+  };
+}
+
+function wsSend(msg) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+// Track which input is active
+let activeInput = null;
+
+function showInput(el, x, y, w) {
+  el.style.display = 'block';
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+  el.style.width = w + 'px';
+  el.focus();
+  activeInput = el;
+}
+
+function hideInputs() {
+  nameInput.style.display = 'none';
+  codeInput.style.display = 'none';
+  activeInput = null;
+}
+
+// Prevent game keys when typing in inputs
+nameInput.addEventListener('keydown', (e) => { e.stopPropagation(); });
+codeInput.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Enter') {
+    const code = codeInput.value.toUpperCase().trim();
+    if (code.length === 4) {
+      myName = nameInput.value.trim() || 'Player';
+      localStorage.setItem('gpName', myName);
+      const trySend = () => {
+        if (ws && ws.readyState === 1) {
+          wsSend({ type: 'join', code, name: myName });
+        } else {
+          setTimeout(trySend, 50);
+        }
+      };
+      trySend();
+      hideInputs();
+    }
+  }
+});
+
+window.addEventListener('keydown', e => {
+  if (activeInput) return; // don't process game keys while typing
+
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+
+  if (mode === 'playing' && S.phase === 'playing') {
+    if (e.key === 'ArrowUp')    move(-1,  0);
+    if (e.key === 'ArrowDown')  move(+1,  0);
+    if (e.key === 'ArrowLeft')  move( 0, -1);
+    if (e.key === 'ArrowRight') move( 0, +1);
+    if (e.key === ' ' || e.key === 'z' || e.key === 'Z') swap();
+  }
+  if (e.key === 'm' || e.key === 'M') music.toggle();
+  if (mode === 'results' && (e.key === ' ' || e.key === 'Enter' || e.key === 'Escape')) {
+    mode = 'menu';
+    computeLayout();
+    hideInputs();
+  }
+});
+
+// ── Mouse / Touch ─────────────────────────────────────────────────────────────
+function getClickPos(e) {
+  if (e.touches) {
+    return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }
+  return { x: e.clientX, y: e.clientY };
+}
+
+function hitTest(pos, buttons) {
+  for (const btn of buttons) {
+    if (pos.x >= btn.x && pos.x <= btn.x + btn.w && pos.y >= btn.y && pos.y <= btn.y + btn.h) {
+      return btn;
+    }
+  }
+  return null;
+}
+
+function handleClick(e) {
+  const pos = getClickPos(e);
+  let buttons;
+  switch (mode) {
+    case 'menu':    buttons = menuButtons; break;
+    case 'browser': buttons = browserButtons; break;
+    case 'lobby':   buttons = lobbyButtons; break;
+    case 'results': buttons = resultButtons; break;
+    default: return;
+  }
+  const hit = hitTest(pos, buttons);
+  if (hit && hit.action) hit.action();
+}
+
+canvas.addEventListener('click', handleClick);
+canvas.addEventListener('touchstart', (e) => { e.preventDefault(); handleClick(e); }, { passive: false });
+
+// ── Drawing Helpers ───────────────────────────────────────────────────────────
+function tileY(r) { return L.gridOffY + r * L.cell; }
+function tileX(c) { return L.gridOffX + c * L.cell; }
+
+function rgba(hex, a) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+function drawTile(tile, px, py, glowing, flashPhase) {
+  const cs = L.cell, cx = px + cs / 2;
+  const TL_x = px,      TL_y = py;
+  const TR_x = px + cs, TR_y = py;
+  const BL_x = px,      BL_y = py + cs;
+  const BR_x = px + cs, BR_y = py + cs;
+
+  ctx.save();
+  ctx.lineCap  = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = glowing ? Math.max(3, cs * 0.055) : Math.max(2, cs * 0.04);
+
+  if (flashPhase !== undefined) {
+    const a = 0.4 + 0.6 * Math.abs(Math.sin(flashPhase * Math.PI * 4));
+    ctx.fillStyle = `rgba(255,255,255,${a * 0.25})`;
+    ctx.fillRect(px, py, cs, cs);
+    ctx.strokeStyle = `rgba(255,255,255,${0.5 + 0.5 * a})`;
+    ctx.shadowColor = '#fff';
+    ctx.shadowBlur  = cs * 0.35;
+  } else {
+    ctx.strokeStyle = glowing ? GLOW_CLR[tile] : TILE_CLR[tile];
+    if (glowing) { ctx.shadowColor = GLOW_CLR[tile]; ctx.shadowBlur = cs * 0.28; }
+  }
+
+  ctx.beginPath();
+  switch (tile) {
+    case '/':  ctx.moveTo(BL_x, BL_y); ctx.lineTo(TR_x, TR_y); break;
+    case '\\': ctx.moveTo(TL_x, TL_y); ctx.lineTo(BR_x, BR_y); break;
+    case '^':  ctx.moveTo(BL_x, BL_y); ctx.lineTo(cx, py + cs * 0.5); ctx.lineTo(BR_x, BR_y); break;
+    case 'v':  ctx.moveTo(TL_x, TL_y); ctx.lineTo(cx, py + cs * 0.5); ctx.lineTo(TR_x, TR_y); break;
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ── Draw the game grid ────────────────────────────────────────────────────────
+function drawGrid() {
+  const cs = L.cell;
+  const ox = L.gridOffX, oy = L.gridOffY;
+  const accent = S.accent;
+
+  for (let r = -1; r <= ROWS; r++) {
+    const py = tileY(r);
+    if (py + cs < 0 || py > L.canH) continue;
+    const danger = r >= 0 && r < DANGER_ROWS;
+    for (let c = 0; c < COLS; c++) {
+      const px = tileX(c);
+      ctx.fillStyle = danger ? 'rgba(70,5,5,0.82)' : 'rgba(8,8,24,0.82)';
+      ctx.fillRect(px, py, cs, cs);
+      ctx.strokeStyle = danger ? 'rgba(180,40,40,0.25)' : 'rgba(50,50,100,0.35)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(px + 0.5, py + 0.5, cs - 1, cs - 1);
+    }
+  }
+
+  // Danger zone line
+  const dlY = tileY(DANGER_ROWS);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,60,60,0.65)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath(); ctx.moveTo(ox, dlY); ctx.lineTo(ox + L.gridW, dlY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // Tiles
+  const chained = getChainedCells();
+  for (let r = 0; r < ROWS; r++) {
+    const py = tileY(r);
+    if (py + cs < 0 || py > L.canH) continue;
+    for (let c = 0; c < COLS; c++) {
+      const tile = S.grid[r][c];
+      if (!tile) continue;
+      const key = `${r},${c}`;
+      const flashing = S.flashTimer > 0 && S.flashCells.has(key);
+      const fp = flashing ? 1 - S.flashTimer / FLASH_F : undefined;
+      drawTile(tile, tileX(c), py, chained.has(key), fp);
+    }
+  }
+
+  // Incoming row
+  {
+    const py = tileY(ROWS);
+    const warning = S.flashTimer === 0 && S.pushCountdown <= PUSH_FLASH_F;
+    const fp = warning ? 1 - S.pushCountdown / PUSH_FLASH_F : undefined;
+    for (let c = 0; c < COLS; c++) {
+      const px = tileX(c);
+      ctx.fillStyle = 'rgba(8,8,24,0.82)';
+      ctx.fillRect(px, py, cs, cs);
+      ctx.strokeStyle = 'rgba(50,50,100,0.35)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(px + 0.5, py + 0.5, cs - 1, cs - 1);
+    }
+    for (let c = 0; c < COLS; c++) {
+      if (S.nextRow[c]) drawTile(S.nextRow[c], tileX(c), py, false, fp);
+    }
+  }
+
+  // Garbage indicator (red bar on left edge)
+  if (S.pendingGarbage > 0) {
+    const barH = Math.min(S.pendingGarbage * cs, L.gridH);
+    ctx.fillStyle = 'rgba(255,40,40,0.6)';
+    ctx.fillRect(ox - 6, oy + L.gridH - barH, 4, barH);
+  }
+
+  // Cursor
+  if (S.phase === 'playing') {
+    const px = tileX(S.curC), py = tileY(S.curR);
+    const pulse = 0.5 + 0.5 * Math.sin(S.frame * 0.1);
+    const bsz = Math.max(9, cs * 0.2);
+    const bx = px + 2, by = py + 2, bw = cs - 4, bh = cs * 2 - 4;
+
+    ctx.save();
+    ctx.strokeStyle = rgba(accent, pulse);
+    ctx.lineWidth = Math.max(2, cs * 0.042);
+    ctx.lineCap = 'square';
+    ctx.shadowColor = accent;
+    ctx.shadowBlur  = 10;
+    const brackets = [
+      [[bx, by + bsz],      [bx, by],      [bx + bsz, by]],
+      [[bx+bw-bsz, by],     [bx+bw, by],   [bx+bw, by+bsz]],
+      [[bx, by+bh-bsz],     [bx, by+bh],   [bx+bsz, by+bh]],
+      [[bx+bw-bsz, by+bh],  [bx+bw, by+bh],[bx+bw, by+bh-bsz]],
+    ];
+    for (const pts of brackets) {
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      ctx.lineTo(pts[1][0], pts[1][1]);
+      ctx.lineTo(pts[2][0], pts[2][1]);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = rgba(accent, pulse * 0.35);
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 4]);
+    ctx.beginPath(); ctx.moveTo(bx, by + cs); ctx.lineTo(bx + bw, by + cs); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+}
+
+// ── Frame border ──────────────────────────────────────────────────────────────
+function drawFrame() {
+  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh, cell } = L;
+  const accent = S.accent || '#7b7bff';
+  const pad = 3;
+  const totalH = gh + cell;
+
+  ctx.save();
+  ctx.shadowColor = accent;
+  ctx.shadowBlur  = 18;
+  ctx.strokeStyle = rgba(accent, 0.9);
+  ctx.lineWidth   = 1.5;
+  ctx.strokeRect(ox - pad, oy - pad, gw + pad * 2, totalH + pad * 2);
+  ctx.restore();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(ox - pad - 3, oy - pad - 3, gw + (pad + 3) * 2, totalH + (pad + 3) * 2);
+
+  const csz = Math.max(8, cell * 0.15);
+  ctx.save();
+  ctx.fillStyle = accent;
+  ctx.shadowColor = accent;
+  ctx.shadowBlur  = 12;
+  const fp = pad;
+  [
+    [ox - fp - csz,  oy - fp - csz],
+    [ox + gw + fp,   oy - fp - csz],
+    [ox - fp - csz,  oy + totalH + fp],
+    [ox + gw + fp,   oy + totalH + fp],
+  ].forEach(([x, y]) => ctx.fillRect(x, y, csz, csz));
+  ctx.restore();
+}
+
+// ── Mini-Board Rendering ──────────────────────────────────────────────────────
+function drawMiniBoard(opp, x, y, w, h) {
+  // Background
+  ctx.fillStyle = 'rgba(8,8,24,0.85)';
+  ctx.fillRect(x, y, w, h);
+
+  // Border: red if dead, green if alive
+  ctx.strokeStyle = opp.alive ? 'rgba(100,255,100,0.5)' : 'rgba(255,60,60,0.5)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(x, y, w, h);
+
+  // Draw grid cells
+  if (opp.grid && opp.grid.length === ROWS * COLS) {
+    const cellW = w / COLS;
+    const cellH = (h - 14) / ROWS; // leave room for name label
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const ch = opp.grid[r * COLS + c];
+        if (ch !== '.') {
+          ctx.fillStyle = TILE_CLR[ch] || '#888';
+          ctx.fillRect(x + c * cellW + 0.5, y + r * cellH + 0.5, cellW - 1, cellH - 1);
+        }
+      }
+    }
+  }
+
+  // Dead overlay
+  if (!opp.alive) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = '#ff4444';
+    ctx.font = `bold ${Math.max(8, w * 0.18)}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.fillText('DEAD', x + w / 2, y + h / 2);
+  }
+
+  // Name label
+  ctx.fillStyle = opp.alive ? '#ccc' : '#666';
+  ctx.font = `${Math.max(8, Math.min(11, w * 0.14))}px Arial`;
+  ctx.textAlign = 'center';
+  const nameStr = opp.name || '???';
+  ctx.fillText(nameStr.length > 8 ? nameStr.slice(0, 7) + '.' : nameStr, x + w / 2, y + h - 2);
+}
+
+function drawMiniBoardArea() {
+  if (!L.miniArea) return;
+  const { x: areaX, y: areaY, w: areaW, h: areaH } = L.miniArea;
+
+  // Get top 20 opponents to display (prioritize alive, then by score)
+  const opps = [...opponents.values()];
+  opps.sort((a, b) => {
+    if (a.alive !== b.alive) return a.alive ? -1 : 1;
+    return b.score - a.score;
+  });
+  const shown = opps.slice(0, 20);
+
+  const cols = 4;
+  const rows = 5;
+  const gap = 4;
+  const bw = Math.floor((areaW - gap * (cols + 1)) / cols);
+  const bh = Math.floor((areaH - gap * (rows + 1)) / rows);
+
+  for (let i = 0; i < shown.length; i++) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const bx = areaX + gap + col * (bw + gap);
+    const by = areaY + gap + row * (bh + gap);
+    drawMiniBoard(shown[i], bx, by, bw, bh);
+  }
+}
+
+// ── HUD for multiplayer ───────────────────────────────────────────────────────
+function drawMultiplayerHUD() {
+  const { gridOffX: ox, gridOffY: oy, gridW: gw, gridH: gh, hudH, ftrH, canW, canH, cell } = L;
+  const accent = S.accent || '#7b7bff';
+
+  // Top bar
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, 0, canW, oy - 4);
+
+  ctx.save();
+  ctx.strokeStyle = rgba(accent, 0.5);
+  ctx.lineWidth = 1;
+  ctx.shadowColor = accent;
+  ctx.shadowBlur = 8;
+  ctx.beginPath(); ctx.moveTo(0, oy - 4); ctx.lineTo(canW, oy - 4); ctx.stroke();
+  ctx.restore();
+
+  const labelSz = Math.max(9, hudH * 0.26) | 0;
+  const valueSz = Math.max(13, hudH * 0.44) | 0;
+  const midY = oy * 0.52;
+
+  const myPlacement = S.placement || (aliveCount <= totalPlayers ? '#' + aliveCount : '');
+  const stats = [
+    { label: 'ALIVE', val: `${aliveCount}/${totalPlayers}`, hi: false },
+    { label: 'SCORE', val: S.score.toLocaleString(), hi: false },
+    { label: 'LEVEL', val: String(S.level), hi: true },
+    { label: 'LINES', val: String(S.lines), hi: false },
+  ];
+
+  const padX = Math.max(16, canW * 0.03);
+  const step = (canW - padX * 2) / stats.length;
+  stats.forEach((st, i) => {
+    const x = padX + step * i + step / 2;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.font = `bold ${labelSz}px Arial`;
+    ctx.fillText(st.label, x, midY - valueSz * 0.1);
+    if (st.hi) {
+      ctx.save();
+      ctx.fillStyle = accent;
+      ctx.shadowColor = accent;
+      ctx.shadowBlur = 10;
+      ctx.font = `bold ${valueSz}px Arial`;
+      ctx.fillText(st.val, x, midY + valueSz * 0.9);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${valueSz}px Arial`;
+      ctx.fillText(st.val, x, midY + valueSz * 0.9);
+    }
+  });
+
+  // Footer
+  const ftrTop = oy + gh + cell + 4;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(0, ftrTop, canW, canH - ftrTop);
+  ctx.save();
+  ctx.strokeStyle = rgba(accent, 0.35);
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, ftrTop); ctx.lineTo(canW, ftrTop); ctx.stroke();
+  ctx.restore();
+
+  const ftr = Math.max(9, ftrH * 0.42) | 0;
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = `${ftr}px Arial`;
+  const controls = mode === 'spectating' ? 'Spectating...' : '←→↑↓  move    Z / SPC  swap    M  mute';
+  ctx.fillText(controls, canW / 2, ftrTop + ftrH * 0.55);
+
+  // Track name
+  const trackName = music.currentName;
+  if (trackName) {
+    const noteSz = Math.max(8, ftrH * 0.34) | 0;
+    const pulse = music.paused ? 0.25 : (0.45 + 0.2 * Math.sin(S.frame * 0.06));
+    ctx.textAlign = 'right';
+    ctx.fillStyle = rgba(accent, pulse);
+    ctx.font = `${noteSz}px Arial`;
+    ctx.fillText(`♪ ${trackName}`, canW - 10, ftrTop + ftrH * 0.82);
+  }
+
+  // Combo message
+  if (S.comboTimer > 0) {
+    const alpha = Math.min(1, S.comboTimer / 30);
+    const rise = (120 - S.comboTimer) * 0.4;
+    const fCombo = Math.max(16, Math.min(cell * 0.55, 36)) | 0;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 20;
+    ctx.fillStyle = accent;
+    ctx.font = `bold ${fCombo}px Arial`;
+    ctx.fillText(S.comboMsg, ox + gw / 2, oy + gh / 2 - rise);
+    ctx.restore();
+  }
+}
+
+// ── Menu Screen ───────────────────────────────────────────────────────────────
+function drawMenuScreen() {
+  const { canW, canH } = L;
+  ctx.fillStyle = '#060612';
+  ctx.fillRect(0, 0, canW, canH);
+
+  // Title
+  ctx.textAlign = 'center';
+  ctx.save();
+  ctx.fillStyle = '#7b7bff';
+  ctx.shadowColor = '#7b7bff';
+  ctx.shadowBlur = 30;
+  ctx.font = `bold ${Math.min(64, canW * 0.08)}px Arial`;
+  ctx.fillText('GUNPEY', canW / 2, canH * 0.22);
+  ctx.restore();
+
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = `${Math.min(18, canW * 0.025)}px Arial`;
+  ctx.fillText('Multiplayer', canW / 2, canH * 0.28);
+
+  // Name input position
+  const inputW = Math.min(250, canW * 0.35);
+  const inputX = canW / 2 - inputW / 2;
+  const inputY = canH * 0.35;
+
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = `14px Arial`;
+  ctx.fillText('Your Name:', canW / 2, inputY - 8);
+
+  // Position the name input
+  nameInput.style.display = 'block';
+  nameInput.style.left = inputX + 'px';
+  nameInput.style.top = inputY + 'px';
+  nameInput.style.width = inputW + 'px';
+  if (!nameInput.value && myName) nameInput.value = myName;
+
+  // Buttons
+  menuButtons = [];
+  const btnW = Math.min(260, canW * 0.35);
+  const btnH = 48;
+  const btnX = canW / 2 - btnW / 2;
+  const btnStartY = canH * 0.48;
+  const btnGap = 16;
+
+  const btns = [
+    { label: 'Create Room', action: () => {
+      myName = nameInput.value.trim() || 'Player';
+      localStorage.setItem('gpName', myName);
+      connectWS();
+      // Wait for connection then create
+      const waitCreate = setInterval(() => {
+        if (ws && ws.readyState === 1) {
+          clearInterval(waitCreate);
+          wsSend({ type: 'create', name: myName });
+        }
+      }, 50);
+      hideInputs();
+    }},
+    { label: 'Browse Rooms', action: () => {
+      myName = nameInput.value.trim() || 'Player';
+      localStorage.setItem('gpName', myName);
+      connectWS();
+      mode = 'browser';
+      computeLayout();
+      hideInputs();
+    }},
+    { label: 'Join by Code', action: () => {
+      myName = nameInput.value.trim() || 'Player';
+      localStorage.setItem('gpName', myName);
+      if (!ws || ws.readyState !== 1) connectWS();
+      // Show code input
+      const codeInputX = canW / 2 - 80;
+      const codeInputY = btnStartY + (btnH + btnGap) * 2 + 16;
+      showInput(codeInput, codeInputX, codeInputY, 160);
+    }},
+  ];
+
+  btns.forEach((btn, i) => {
+    const by = btnStartY + i * (btnH + btnGap);
+    ctx.fillStyle = 'rgba(60,60,120,0.7)';
+    ctx.fillRect(btnX, by, btnW, btnH);
+    ctx.strokeStyle = 'rgba(123,123,255,0.5)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(btnX, by, btnW, btnH);
+    ctx.fillStyle = '#ddd';
+    ctx.font = `bold 16px Arial`;
+    ctx.textAlign = 'center';
+    ctx.fillText(btn.label, canW / 2, by + btnH / 2 + 6);
+    menuButtons.push({ x: btnX, y: by, w: btnW, h: btnH, action: btn.action });
+  });
+}
+
+// ── Browser Screen ────────────────────────────────────────────────────────────
+function drawBrowserScreen() {
+  const { canW, canH } = L;
+  ctx.fillStyle = '#060612';
+  ctx.fillRect(0, 0, canW, canH);
+
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#7b7bff';
+  ctx.font = `bold ${Math.min(36, canW * 0.05)}px Arial`;
+  ctx.fillText('Room Browser', canW / 2, canH * 0.1);
+
+  browserButtons = [];
+
+  // Refresh room list periodically
+  roomListTimer++;
+  if (roomListTimer >= 180 || roomListTimer === 1) { // every 3s
+    roomListTimer = 1;
+    if (ws && ws.readyState === 1) wsSend({ type: 'list' });
+  }
+
+  // Room list
+  const listX = canW * 0.15;
+  const listW = canW * 0.7;
+  const rowH = 44;
+  const startY = canH * 0.18;
+
+  if (roomList.length === 0) {
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = '16px Arial';
+    ctx.fillText('No rooms available. Create one!', canW / 2, startY + 40);
+  }
+
+  roomList.forEach((room, i) => {
+    const ry = startY + i * (rowH + 4);
+    ctx.fillStyle = 'rgba(40,40,80,0.7)';
+    ctx.fillRect(listX, ry, listW, rowH);
+    ctx.strokeStyle = 'rgba(123,123,255,0.3)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(listX, ry, listW, rowH);
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 16px Arial';
+    ctx.fillText(`[${room.code}]  ${room.host}'s room`, listX + 12, ry + rowH / 2 + 5);
+
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.font = '14px Arial';
+    ctx.fillText(`${room.playerCount} player${room.playerCount !== 1 ? 's' : ''}`, listX + listW - 80, ry + rowH / 2 + 5);
+
+    // Join button
+    const joinW = 60;
+    const joinX = listX + listW - joinW - 8;
+    const joinY = ry + 6;
+    const joinH = rowH - 12;
+    ctx.fillStyle = 'rgba(60,120,60,0.7)';
+    ctx.fillRect(joinX, joinY, joinW, joinH);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 13px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('Join', joinX + joinW / 2, joinY + joinH / 2 + 5);
+
+    browserButtons.push({
+      x: listX, y: ry, w: listW, h: rowH,
+      action: () => {
+        myName = myName || 'Player';
+        wsSend({ type: 'join', code: room.code, name: myName });
+      },
+    });
+  });
+
+  // Back button
+  const backW = 120;
+  const backH = 40;
+  const backX = canW / 2 - backW / 2;
+  const backY = canH - 80;
+  ctx.fillStyle = 'rgba(80,40,40,0.7)';
+  ctx.fillRect(backX, backY, backW, backH);
+  ctx.strokeStyle = 'rgba(255,100,100,0.4)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(backX, backY, backW, backH);
+  ctx.fillStyle = '#ddd';
+  ctx.font = 'bold 14px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('Back', canW / 2, backY + backH / 2 + 5);
+  browserButtons.push({
+    x: backX, y: backY, w: backW, h: backH,
+    action: () => { mode = 'menu'; computeLayout(); },
+  });
+}
+
+// ── Lobby Screen ──────────────────────────────────────────────────────────────
+function drawLobbyScreen() {
+  const { canW, canH } = L;
+  ctx.fillStyle = '#060612';
+  ctx.fillRect(0, 0, canW, canH);
+
+  lobbyButtons = [];
+
+  // Room code
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = '14px Arial';
+  ctx.fillText('Room Code:', canW / 2, canH * 0.1);
+
+  ctx.save();
+  ctx.fillStyle = '#7b7bff';
+  ctx.shadowColor = '#7b7bff';
+  ctx.shadowBlur = 20;
+  ctx.font = `bold ${Math.min(72, canW * 0.1)}px Arial`;
+  ctx.fillText(roomCode, canW / 2, canH * 0.2);
+  ctx.restore();
+
+  // Player list
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 18px Arial';
+  ctx.fillText(`Players (${lobbyPlayers.length})`, canW / 2, canH * 0.3);
+
+  const listStartY = canH * 0.35;
+  lobbyPlayers.forEach((p, i) => {
+    ctx.fillStyle = p.id === myPlayerId ? '#7b7bff' : '#ccc';
+    ctx.font = '16px Arial';
+    const youTag = p.id === myPlayerId ? ' (you)' : '';
+    const hostTag = (isHost && p.id === myPlayerId) || (!isHost && i === 0) ? ' [HOST]' : '';
+    ctx.fillText(`${p.name}${youTag}${hostTag}`, canW / 2, listStartY + i * 28);
+  });
+
+  // Start button (host only)
+  if (isHost) {
+    const btnW = 200;
+    const btnH = 50;
+    const btnX = canW / 2 - btnW / 2;
+    const btnY = canH * 0.75;
+    const canStart = lobbyPlayers.length >= 2;
+
+    ctx.fillStyle = canStart ? 'rgba(60,120,60,0.8)' : 'rgba(60,60,60,0.5)';
+    ctx.fillRect(btnX, btnY, btnW, btnH);
+    ctx.strokeStyle = canStart ? 'rgba(100,255,100,0.5)' : 'rgba(100,100,100,0.3)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(btnX, btnY, btnW, btnH);
+
+    ctx.fillStyle = canStart ? '#fff' : '#666';
+    ctx.font = 'bold 18px Arial';
+    ctx.fillText(canStart ? 'START GAME' : 'Need 2+ players', canW / 2, btnY + btnH / 2 + 6);
+
+    if (canStart) {
+      lobbyButtons.push({
+        x: btnX, y: btnY, w: btnW, h: btnH,
+        action: () => wsSend({ type: 'start' }),
+      });
+    }
+  } else {
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '16px Arial';
+    ctx.fillText('Waiting for host to start...', canW / 2, canH * 0.78);
+  }
+
+  // Back button
+  const backW = 100;
+  const backH = 36;
+  const backX = canW / 2 - backW / 2;
+  const backY = canH - 60;
+  ctx.fillStyle = 'rgba(80,40,40,0.7)';
+  ctx.fillRect(backX, backY, backW, backH);
+  ctx.fillStyle = '#ddd';
+  ctx.font = 'bold 13px Arial';
+  ctx.fillText('Leave', canW / 2, backY + backH / 2 + 5);
+  lobbyButtons.push({
+    x: backX, y: backY, w: backW, h: backH,
+    action: () => {
+      if (ws) ws.close();
+      mode = 'menu';
+      computeLayout();
+    },
+  });
+}
+
+// ── Results Screen ────────────────────────────────────────────────────────────
+function drawResultsScreen() {
+  const { canW, canH } = L;
+  ctx.fillStyle = '#060612';
+  ctx.fillRect(0, 0, canW, canH);
+
+  resultButtons = [];
+
+  ctx.textAlign = 'center';
+
+  // Title
+  const isWinner = S.placement === 1;
+  ctx.save();
+  ctx.fillStyle = isWinner ? '#39ff14' : '#ff5555';
+  ctx.shadowColor = isWinner ? '#39ff14' : '#ff5555';
+  ctx.shadowBlur = 25;
+  ctx.font = `bold ${Math.min(52, canW * 0.07)}px Arial`;
+  ctx.fillText(isWinner ? 'VICTORY!' : 'GAME OVER', canW / 2, canH * 0.14);
+  ctx.restore();
+
+  if (S.placement) {
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${Math.min(36, canW * 0.05)}px Arial`;
+    const suffix = S.placement === 1 ? 'st' : S.placement === 2 ? 'nd' : S.placement === 3 ? 'rd' : 'th';
+    ctx.fillText(`${S.placement}${suffix} Place`, canW / 2, canH * 0.22);
+  }
+
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = '16px Arial';
+  ctx.fillText(`Score: ${S.score.toLocaleString()}  |  Lines: ${S.lines}  |  Level: ${S.level}`, canW / 2, canH * 0.3);
+
+  // Placements list
+  if (resultData && resultData.placements) {
+    ctx.fillStyle = '#7b7bff';
+    ctx.font = 'bold 18px Arial';
+    ctx.fillText('Final Standings', canW / 2, canH * 0.38);
+
+    const top = resultData.placements.slice(0, 10);
+    top.forEach((p, i) => {
+      const isMe = p.id === myPlayerId;
+      ctx.fillStyle = isMe ? '#7b7bff' : '#ccc';
+      ctx.font = `${isMe ? 'bold ' : ''}15px Arial`;
+      const suffix = p.placement === 1 ? 'st' : p.placement === 2 ? 'nd' : p.placement === 3 ? 'rd' : 'th';
+      ctx.fillText(`${p.placement}${suffix}  ${p.name}${isMe ? ' (you)' : ''}`, canW / 2, canH * 0.43 + i * 26);
+    });
+  }
+
+  // Back button
+  const btnW = 200;
+  const btnH = 48;
+  const btnX = canW / 2 - btnW / 2;
+  const btnY = canH * 0.85;
+  ctx.fillStyle = 'rgba(60,60,120,0.7)';
+  ctx.fillRect(btnX, btnY, btnW, btnH);
+  ctx.strokeStyle = 'rgba(123,123,255,0.5)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(btnX, btnY, btnW, btnH);
+  ctx.fillStyle = '#ddd';
+  ctx.font = 'bold 16px Arial';
+  ctx.fillText('Back to Menu', canW / 2, btnY + btnH / 2 + 6);
+  resultButtons.push({
+    x: btnX, y: btnY, w: btnW, h: btnH,
+    action: () => {
+      mode = 'menu';
+      if (ws) ws.close();
+      computeLayout();
+    },
+  });
+}
+
+// ── Error message ─────────────────────────────────────────────────────────────
+function drawError() {
+  if (errorTimer <= 0) return;
+  errorTimer--;
+  const alpha = Math.min(1, errorTimer / 30);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = 'rgba(180,30,30,0.85)';
+  const ew = Math.min(400, L.canW * 0.6);
+  const eh = 40;
+  ctx.fillRect(L.canW / 2 - ew / 2, L.canH - 80, ew, eh);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 14px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText(errorMsg, L.canW / 2, L.canH - 80 + eh / 2 + 5);
+  ctx.restore();
+}
+
+// ── Main Render ───────────────────────────────────────────────────────────────
+function render() {
+  switch (mode) {
+    case 'menu':
+      drawMenuScreen();
+      break;
+
+    case 'browser':
+      drawBrowserScreen();
+      break;
+
+    case 'lobby':
+      drawLobbyScreen();
+      break;
+
+    case 'playing':
+    case 'spectating': {
+      // Background
+      if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
+        ctx.drawImage(bgImg, 0, 0, L.canW, L.canH);
+        ctx.fillStyle = 'rgba(0,0,8,0.58)';
+        ctx.fillRect(0, 0, L.canW, L.canH);
+      } else {
+        ctx.fillStyle = '#060612';
+        ctx.fillRect(0, 0, L.canW, L.canH);
+      }
+
+      // Grid (clipped)
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(L.gridOffX - 8, L.gridOffY, L.gridW + 16, L.gridH + L.cell + 2);
+      ctx.clip();
+      drawGrid();
+      ctx.restore();
+
+      drawFrame();
+      drawMiniBoardArea();
+      drawMultiplayerHUD();
+
+      if (mode === 'spectating') {
+        ctx.save();
+        ctx.globalAlpha = 0.7;
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(L.gridOffX, L.gridOffY, L.gridW, 40);
+        ctx.fillStyle = '#ff9500';
+        ctx.font = 'bold 16px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(`Eliminated - #${S.placement || '?'}`, L.gridOffX + L.gridW / 2, L.gridOffY + 26);
+        ctx.restore();
+      }
+      break;
+    }
+
+    case 'results':
+      drawResultsScreen();
+      break;
+  }
+
+  drawError();
+}
+
+// ── State broadcasting ────────────────────────────────────────────────────────
+let broadcastCounter = 0;
+
+function broadcastState() {
+  if (!ws || ws.readyState !== 1 || mode !== 'playing') return;
+  broadcastCounter++;
+  if (broadcastCounter >= 30) { // every 30 frames ≈ 2/sec
+    broadcastCounter = 0;
+    wsSend({
+      type: 'state',
+      score: S.score,
+      lines: S.lines,
+      level: S.level,
+      grid: encodeGrid(),
+    });
+  }
+}
+
+// ── Game loop ─────────────────────────────────────────────────────────────────
+function loop() {
+  S.frame = (S.frame || 0) + 1;
+  if (mode === 'playing' && S.phase === 'playing') {
+    updateScroll();
+    updateFlash();
+    if (S.comboTimer > 0) S.comboTimer--;
+    broadcastState();
+  }
+  if (mode === 'spectating') {
+    if (S.comboTimer > 0) S.comboTimer--;
+  }
+  render();
+  requestAnimationFrame(loop);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+initState();
+computeLayout();
+loop();
+</script>
+</body>
+</html>
