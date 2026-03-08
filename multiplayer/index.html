@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gunpey</title>
+  <title>Gunpey 99</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
@@ -186,6 +186,77 @@ function loadBg() {
   img.onload = () => { bgImg = img; };
 }
 loadBg();
+
+// ── Menu Background Animation ─────────────────────────────────────────────────
+const menuParticles = [];
+const MENU_PARTICLE_COUNT = 40;
+
+function initMenuParticles() {
+  menuParticles.length = 0;
+  for (let i = 0; i < MENU_PARTICLE_COUNT; i++) {
+    menuParticles.push(makeMenuParticle(true));
+  }
+}
+
+function makeMenuParticle(randomY) {
+  const tile = TILE_TYPES[Math.floor(Math.random() * 4)];
+  const size = 12 + Math.random() * 28;
+  return {
+    tile,
+    x: Math.random() * (canvas.width || 1280),
+    y: randomY ? Math.random() * (canvas.height || 720) : -(size + Math.random() * 100),
+    size,
+    speed: 0.2 + Math.random() * 0.6,
+    drift: (Math.random() - 0.5) * 0.3,
+    alpha: 0.08 + Math.random() * 0.15,
+    color: TILE_CLR[tile],
+  };
+}
+
+function updateMenuParticles(canW, canH) {
+  for (let i = 0; i < menuParticles.length; i++) {
+    const p = menuParticles[i];
+    p.y += p.speed;
+    p.x += p.drift;
+    if (p.y > canH + p.size || p.x < -p.size || p.x > canW + p.size) {
+      menuParticles[i] = makeMenuParticle(false);
+      menuParticles[i].x = Math.random() * canW;
+    }
+  }
+}
+
+function drawMenuParticles(canW, canH) {
+  for (const p of menuParticles) {
+    ctx.save();
+    ctx.globalAlpha = p.alpha;
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = Math.max(1.5, p.size * 0.08);
+    ctx.lineCap = 'round';
+    const s = p.size;
+    const x = p.x, y = p.y;
+    ctx.beginPath();
+    switch (p.tile) {
+      case '/':  ctx.moveTo(x, y + s); ctx.lineTo(x + s, y); break;
+      case '\\': ctx.moveTo(x, y); ctx.lineTo(x + s, y + s); break;
+      case '^':  ctx.moveTo(x, y + s); ctx.lineTo(x + s/2, y + s*0.5); ctx.lineTo(x + s, y + s); break;
+      case 'v':  ctx.moveTo(x, y); ctx.lineTo(x + s/2, y + s*0.5); ctx.lineTo(x + s, y); break;
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawScanlines(canW, canH) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.04)';
+  for (let y = 0; y < canH; y += 3) {
+    ctx.fillRect(0, y, canW, 1);
+  }
+  ctx.restore();
+}
+
+let menuFrame = 0;
+initMenuParticles();
 
 // ── Mode State Machine ───────────────────────────────────────────────────────
 // menu → browser → lobby → playing → results
@@ -1424,33 +1495,91 @@ function drawMultiplayerHUD() {
 // ── Menu Screen ───────────────────────────────────────────────────────────────
 function drawMenuScreen() {
   const { canW, canH } = L;
-  ctx.fillStyle = '#060612';
+  menuFrame++;
+
+  // Dark background with subtle gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, canH);
+  grad.addColorStop(0, '#05050f');
+  grad.addColorStop(0.5, '#0a0a20');
+  grad.addColorStop(1, '#050510');
+  ctx.fillStyle = grad;
   ctx.fillRect(0, 0, canW, canH);
 
-  // Title
-  ctx.textAlign = 'center';
+  // Animated falling tile particles
+  updateMenuParticles(canW, canH);
+  drawMenuParticles(canW, canH);
+
+  // Retro grid floor effect
   ctx.save();
-  ctx.fillStyle = '#7b7bff';
-  ctx.shadowColor = '#7b7bff';
-  ctx.shadowBlur = 30;
-  ctx.font = `bold ${Math.min(64, canW * 0.08)}px Arial`;
-  ctx.fillText('GUNPEY', canW / 2, canH * 0.22);
+  ctx.strokeStyle = 'rgba(123,123,255,0.06)';
+  ctx.lineWidth = 1;
+  const gridSpacing = 40;
+  for (let x = 0; x < canW; x += gridSpacing) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canH); ctx.stroke();
+  }
+  for (let y = 0; y < canH; y += gridSpacing) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canW, y); ctx.stroke();
+  }
   ctx.restore();
 
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ctx.font = `${Math.min(16, canW * 0.022)}px Arial`;
-  ctx.fillText('Connect lines left to right to clear them', canW / 2, canH * 0.28);
+  // Scanlines
+  drawScanlines(canW, canH);
 
-  // Name input position
-  const inputW = Math.min(250, canW * 0.35);
+  ctx.textAlign = 'center';
+
+  // Title: GUNPEY 99
+  const titleSz = Math.min(72, canW * 0.09);
+  const titleY = canH * 0.18;
+
+  // Glow pulse
+  const pulse = 0.7 + 0.3 * Math.sin(menuFrame * 0.04);
+
+  // "GUNPEY" main title
+  ctx.save();
+  ctx.shadowColor = '#7b7bff';
+  ctx.shadowBlur = 25 * pulse;
+  ctx.fillStyle = '#7b7bff';
+  ctx.font = `bold ${titleSz}px Arial`;
+  ctx.fillText('GUNPEY', canW / 2, titleY);
+  ctx.restore();
+
+  // "99" in accent color, offset
+  const nnSz = Math.min(48, canW * 0.06);
+  ctx.save();
+  ctx.shadowColor = '#ff2d78';
+  ctx.shadowBlur = 18 * pulse;
+  ctx.fillStyle = '#ff2d78';
+  ctx.font = `bold italic ${nnSz}px Arial`;
+  ctx.fillText('99', canW / 2 + titleSz * 1.8, titleY - nnSz * 0.1);
+  ctx.restore();
+
+  // Subtitle
+  ctx.fillStyle = `rgba(255,255,255,${0.25 + 0.1 * Math.sin(menuFrame * 0.03)})`;
+  ctx.font = `${Math.min(14, canW * 0.02)}px Arial`;
+  ctx.fillText('Connect lines from left to right', canW / 2, titleY + titleSz * 0.45);
+
+  // Decorative line under title
+  const lineW = Math.min(300, canW * 0.35);
+  const lineY = titleY + titleSz * 0.6;
+  ctx.save();
+  const lineGrad = ctx.createLinearGradient(canW/2 - lineW/2, 0, canW/2 + lineW/2, 0);
+  lineGrad.addColorStop(0, 'rgba(123,123,255,0)');
+  lineGrad.addColorStop(0.5, `rgba(123,123,255,${0.5 * pulse})`);
+  lineGrad.addColorStop(1, 'rgba(123,123,255,0)');
+  ctx.strokeStyle = lineGrad;
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(canW/2 - lineW/2, lineY); ctx.lineTo(canW/2 + lineW/2, lineY); ctx.stroke();
+  ctx.restore();
+
+  // Name input
+  const inputW = Math.min(220, canW * 0.3);
   const inputX = canW / 2 - inputW / 2;
-  const inputY = canH * 0.35;
+  const inputY = canH * 0.36;
 
-  ctx.fillStyle = 'rgba(255,255,255,0.5)';
-  ctx.font = `14px Arial`;
-  ctx.fillText('Your Name:', canW / 2, inputY - 8);
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = '12px Arial';
+  ctx.fillText('PLAYER NAME', canW / 2, inputY - 8);
 
-  // Position the name input
   nameInput.style.display = 'block';
   nameInput.style.left = inputX + 'px';
   nameInput.style.top = inputY + 'px';
@@ -1459,14 +1588,14 @@ function drawMenuScreen() {
 
   // Buttons
   menuButtons = [];
-  const btnW = Math.min(260, canW * 0.35);
-  const btnH = 44;
+  const btnW = Math.min(240, canW * 0.3);
+  const btnH = 40;
   const btnX = canW / 2 - btnW / 2;
-  const btnStartY = canH * 0.45;
-  const btnGap = 12;
+  const btnStartY = canH * 0.44;
+  const btnGap = 8;
 
   const btns = [
-    { label: 'Solo Play', action: () => {
+    { label: 'SOLO PLAY', color: '#39ff14', action: () => {
       hideInputs();
       soloPlay = true;
       initState();
@@ -1475,11 +1604,10 @@ function drawMenuScreen() {
       music.start();
       computeLayout();
     }},
-    { label: 'Create Room', action: () => {
+    { label: 'CREATE ROOM', color: '#7b7bff', action: () => {
       myName = nameInput.value.trim() || 'Player';
       localStorage.setItem('gpName', myName);
       connectWS();
-      // Wait for connection then create
       const waitCreate = setInterval(() => {
         if (ws && ws.readyState === 1) {
           clearInterval(waitCreate);
@@ -1488,7 +1616,7 @@ function drawMenuScreen() {
       }, 50);
       hideInputs();
     }},
-    { label: 'Browse Rooms', action: () => {
+    { label: 'BROWSE ROOMS', color: '#7b7bff', action: () => {
       myName = nameInput.value.trim() || 'Player';
       localStorage.setItem('gpName', myName);
       connectWS();
@@ -1496,11 +1624,10 @@ function drawMenuScreen() {
       computeLayout();
       hideInputs();
     }},
-    { label: 'Join by Code', action: () => {
+    { label: 'JOIN BY CODE', color: '#ff9500', action: () => {
       myName = nameInput.value.trim() || 'Player';
       localStorage.setItem('gpName', myName);
       if (!ws || ws.readyState !== 1) connectWS();
-      // Show code input
       const codeInputX = canW / 2 - 80;
       const codeInputY = btnStartY + (btnH + btnGap) * 3 + btnH + 8;
       showInput(codeInput, codeInputX, codeInputY, 160);
@@ -1509,17 +1636,33 @@ function drawMenuScreen() {
 
   btns.forEach((btn, i) => {
     const by = btnStartY + i * (btnH + btnGap);
-    ctx.fillStyle = 'rgba(60,60,120,0.7)';
+
+    // Button background
+    ctx.fillStyle = 'rgba(10,10,30,0.75)';
     ctx.fillRect(btnX, by, btnW, btnH);
-    ctx.strokeStyle = 'rgba(123,123,255,0.5)';
+
+    // Colored left accent bar
+    ctx.fillStyle = btn.color;
+    ctx.fillRect(btnX, by, 3, btnH);
+
+    // Border
+    ctx.strokeStyle = rgba(btn.color, 0.35);
     ctx.lineWidth = 1;
     ctx.strokeRect(btnX, by, btnW, btnH);
+
+    // Hover glow effect based on frame
     ctx.fillStyle = '#ddd';
-    ctx.font = `bold 16px Arial`;
+    ctx.font = `bold 14px Arial`;
     ctx.textAlign = 'center';
-    ctx.fillText(btn.label, canW / 2, by + btnH / 2 + 6);
+    ctx.fillText(btn.label, canW / 2, by + btnH / 2 + 5);
+
     menuButtons.push({ x: btnX, y: by, w: btnW, h: btnH, action: btn.action });
   });
+
+  // Footer credit
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.font = '10px Arial';
+  ctx.fillText('M  toggle music', canW / 2, canH - 16);
 }
 
 // ── Browser Screen ────────────────────────────────────────────────────────────
