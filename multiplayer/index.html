@@ -230,6 +230,7 @@ function initState() {
     accent:        ACCENTS[Math.floor(Math.random() * ACCENTS.length)],
     garbageQueue:  [],
     pendingGarbage: 0,
+    garbagePushTimer: 0,
     placement:     null,
   };
 }
@@ -336,15 +337,19 @@ function pushInterval() {
 function updateScroll() {
   if (S.flashTimer > 0) return;
 
-  // Process garbage queue first (rapid push, one row per call)
+  // Process garbage queue (one row every 15 frames ≈ 4/sec)
   if (S.garbageQueue.length > 0) {
-    const gRow = S.garbageQueue.shift();
-    S.pendingGarbage = S.garbageQueue.length;
-    if (S.grid[0].some(t => t !== null)) { triggerDeath(); return; }
-    S.grid.shift();
-    S.grid.push(gRow);
-    S.curR = Math.max(0, S.curR - 1);
-    checkClears();
+    S.garbagePushTimer--;
+    if (S.garbagePushTimer <= 0) {
+      S.garbagePushTimer = 15;
+      const gRow = S.garbageQueue.shift();
+      S.pendingGarbage = S.garbageQueue.length;
+      if (S.grid[0].some(t => t !== null)) { triggerDeath(); return; }
+      S.grid.shift();
+      S.grid.push(gRow);
+      S.curR = Math.max(0, S.curR - 1);
+      checkClears();
+    }
     return;
   }
 
