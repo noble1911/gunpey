@@ -71,7 +71,8 @@ const music = (() => {
   }
   let queue = buildQueue(), qIdx = 0, nowIdx = -1;
   const audio = new Audio();
-  audio.volume = 0.5;
+  const savedVol = parseFloat(localStorage.getItem('gpVol'));
+  audio.volume = isNaN(savedVol) ? 0.15 : savedVol;
   function playNext() {
     nowIdx = queue[qIdx];
     audio.src = trackURL(TRACK_NAMES[nowIdx]);
@@ -88,6 +89,8 @@ const music = (() => {
     toggle() { audio.paused ? audio.play().catch(() => {}) : audio.pause(); },
     get paused()      { return audio.paused; },
     get currentName() { return nowIdx >= 0 ? TRACK_NAMES[nowIdx] : ''; },
+    get volume()      { return audio.volume; },
+    set volume(v)     { audio.volume = Math.max(0, Math.min(1, v)); localStorage.setItem('gpVol', audio.volume); },
   };
 })();
 
@@ -648,6 +651,66 @@ window.addEventListener('keydown', e => {
   }
 });
 
+// ── Volume Slider ─────────────────────────────────────────────────────────────
+// Slider rect gets set each frame by drawVolumeSlider; interaction checks it
+let volSlider = { x: 0, y: 0, w: 0, h: 0, active: false };
+
+function drawVolumeSlider(x, y, w, h, accent) {
+  volSlider = { x, y, w, h };
+  const vol = music.volume;
+  const barH = Math.max(4, h * 0.3);
+  const barY = y + (h - barH) / 2;
+
+  // Track background
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.fillRect(x, barY, w, barH);
+  // Filled portion
+  ctx.fillStyle = rgba(accent, 0.7);
+  ctx.fillRect(x, barY, w * vol, barH);
+  // Knob
+  const knobX = x + w * vol;
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(knobX, barY + barH / 2, Math.max(5, h * 0.35), 0, Math.PI * 2);
+  ctx.fill();
+  // Label
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.font = `${Math.max(8, h * 0.38)}px Arial`;
+  ctx.textAlign = 'right';
+  ctx.fillText('VOL', x - 6, y + h * 0.65);
+}
+
+function handleVolSlider(clientX, clientY) {
+  const { x, y, w, h } = volSlider;
+  if (w === 0) return false;
+  // Expand hit area vertically
+  if (clientX >= x - 8 && clientX <= x + w + 8 && clientY >= y - 10 && clientY <= y + h + 10) {
+    const vol = Math.max(0, Math.min(1, (clientX - x) / w));
+    music.volume = vol;
+    return true;
+  }
+  return false;
+}
+
+let draggingVol = false;
+
+canvas.addEventListener('mousedown', (e) => {
+  if (handleVolSlider(e.clientX, e.clientY)) draggingVol = true;
+});
+canvas.addEventListener('mousemove', (e) => {
+  if (draggingVol) handleVolSlider(e.clientX, e.clientY);
+});
+window.addEventListener('mouseup', () => { draggingVol = false; });
+
+canvas.addEventListener('touchstart', (e) => {
+  const t = e.touches[0];
+  if (handleVolSlider(t.clientX, t.clientY)) { draggingVol = true; }
+}, { passive: true });
+canvas.addEventListener('touchmove', (e) => {
+  if (draggingVol) { const t = e.touches[0]; handleVolSlider(t.clientX, t.clientY); }
+}, { passive: true });
+canvas.addEventListener('touchend', () => { draggingVol = false; });
+
 // ── Mouse / Touch ─────────────────────────────────────────────────────────────
 function getClickPos(e) {
   if (e.touches) {
@@ -1011,16 +1074,19 @@ function drawMultiplayerHUD() {
   const controls = mode === 'spectating' ? 'Spectating...' : '←→↑↓  move    Z / SPC  swap    M  mute';
   ctx.fillText(controls, canW / 2, ftrTop + ftrH * 0.55);
 
-  // Track name
+  // Track name + volume slider
   const trackName = music.currentName;
   if (trackName) {
     const noteSz = Math.max(8, ftrH * 0.34) | 0;
     const pulse = music.paused ? 0.25 : (0.45 + 0.2 * Math.sin(S.frame * 0.06));
-    ctx.textAlign = 'right';
+    ctx.textAlign = 'left';
     ctx.fillStyle = rgba(accent, pulse);
     ctx.font = `${noteSz}px Arial`;
-    ctx.fillText(`♪ ${trackName}`, canW - 10, ftrTop + ftrH * 0.82);
+    ctx.fillText(`♪ ${trackName}`, 10, ftrTop + ftrH * 0.82);
   }
+  const slW = Math.min(100, canW * 0.1);
+  const slH = Math.max(16, ftrH * 0.5);
+  drawVolumeSlider(canW - slW - 16, ftrTop + (ftrH - slH) / 2, slW, slH, accent);
 
   // Combo message
   if (S.comboTimer > 0) {
@@ -1458,16 +1524,20 @@ function drawSoloHUD() {
   ctx.font = `${ftr}px Arial`;
   ctx.fillText('←→↑↓  move    Z / SPC  swap    P  pause    M  mute    R  restart    ESC  menu', canW / 2, ftrTop + ftrH * 0.45);
 
-  // Track name
+  // Track name + volume slider
   const trackName = music.currentName;
   if (trackName) {
     const noteSz = Math.max(9, ftrH * 0.36) | 0;
     const pulse = music.paused ? 0.25 : (0.45 + 0.2 * Math.sin(S.frame * 0.06));
-    ctx.textAlign = 'right';
+    ctx.textAlign = 'left';
     ctx.fillStyle = rgba(accent, pulse);
     ctx.font = `${noteSz}px Arial`;
-    ctx.fillText(`♪ ${trackName}`, ox + gw, ftrTop + ftrH * 0.82);
+    ctx.fillText(`♪ ${trackName}`, ox, ftrTop + ftrH * 0.82);
   }
+  // Volume slider in footer right
+  const slW = Math.min(100, canW * 0.1);
+  const slH = Math.max(16, ftrH * 0.5);
+  drawVolumeSlider(canW - slW - 16, ftrTop + (ftrH - slH) / 2, slW, slH, accent);
 
   // Combo message
   if (S.comboTimer > 0) {
