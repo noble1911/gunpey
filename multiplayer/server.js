@@ -24,11 +24,13 @@ const server = http.createServer((req, res) => {
   if (urlPath === '/') urlPath = '/index.html';
 
   // Serve music/ and sfx/ from the parent directory
-  let filePath;
-  if (urlPath.startsWith('/music/') || urlPath.startsWith('/sfx/') || urlPath === '/favicon.ico') {
-    filePath = path.join(__dirname, '..', urlPath);
-  } else {
-    filePath = path.join(__dirname, urlPath);
+  const root = urlPath.startsWith('/music/') || urlPath.startsWith('/sfx/') || urlPath === '/favicon.ico' ? path.join(__dirname, '..') : __dirname;
+  const filePath = path.join(root, urlPath);
+  // path.join resolves '..': a request like /..%2f..%2fetc/passwd must not leave the served folder.
+  if (!filePath.startsWith(root + path.sep)) {
+    res.writeHead(404);
+    res.end('Not found');
+    return;
   }
 
   const ext = path.extname(filePath).toLowerCase();

@@ -740,8 +740,11 @@ function swap() {
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 function connectWS() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}`);
+  // The server's socket, next to the page: works at a site's root or under a path
+  // (games.noblehaus.uk/gunpey/ reaches it through a gateway that strips the prefix).
+  const url = new URL('./', location.href);
+  url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(url.href);
 
   ws.onopen = () => {};
 
